@@ -16,41 +16,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 检查本地存储中是否有登录信息
-    const savedUser = localStorage.getItem('currentUser');
-    if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      // 验证用户是否仍然存在
-      const verifiedUser = userService.getById(parsedUser.id);
-      if (verifiedUser) {
-        setUser(verifiedUser);
-        userService.updateOnlineStatus(verifiedUser.id, true);
-      } else {
-        localStorage.removeItem('currentUser');
+    const init = async () => {
+      const savedUser = localStorage.getItem('currentUser');
+      if (savedUser) {
+        try {
+          const parsedUser = JSON.parse(savedUser);
+          const verifiedUser = await userService.getById(parsedUser.id);
+          if (verifiedUser) {
+            setUser(verifiedUser);
+            await userService.updateOnlineStatus(verifiedUser.id, true);
+          } else {
+            localStorage.removeItem('currentUser');
+          }
+        } catch {
+          localStorage.removeItem('currentUser');
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+    init();
   }, []);
 
   const login = async (username: string, password: string): Promise<boolean> => {
-    // 模拟API调用延迟
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    const foundUser = userService.authenticate(username, password);
-    
-    if (foundUser) {
-      setUser(foundUser);
-      localStorage.setItem('currentUser', JSON.stringify(foundUser));
-      userService.updateOnlineStatus(foundUser.id, true);
-      return true;
+    try {
+      const foundUser = await userService.authenticate(username, password);
+
+      if (foundUser) {
+        setUser(foundUser);
+        localStorage.setItem('currentUser', JSON.stringify(foundUser));
+        await userService.updateOnlineStatus(foundUser.id, true);
+        return true;
+      }
+    } catch (e: any) {
+      console.error('Login error:', e);
     }
-    
     return false;
   };
 
-  const logout = () => {
+  const logout = async () => {
     if (user) {
-      userService.updateOnlineStatus(user.id, false);
+      try {
+        await userService.updateOnlineStatus(user.id, false);
+      } catch (e) {
+        console.error('Logout error:', e);
+      }
     }
     setUser(null);
     localStorage.removeItem('currentUser');

@@ -36,9 +36,13 @@ export default function UserHome() {
     };
   }, [user]);
 
-  const loadVideos = () => {
-    const allVideos = videoService.getAll();
-    setVideos(allVideos);
+  const loadVideos = async () => {
+    try {
+      const allVideos = await videoService.getAll();
+      setVideos(allVideos);
+    } catch (e: any) {
+      console.error('加载视频失败:', e);
+    }
   };
 
   const handleVideoClick = (videoId: string) => {
@@ -47,7 +51,7 @@ export default function UserHome() {
     navigate(`/video/${videoId}`);
   };
 
-  const handleDeleteVideo = (videoId: string, e: React.MouseEvent) => {
+  const handleDeleteVideo = async (videoId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!user) {
       alert('请先登录');
@@ -58,15 +62,18 @@ export default function UserHome() {
     const video = videos.find(v => v.id === videoId);
     if (!video) return;
     
-    // 检查权限: 管理员可以删除任何视频,用户只能删除自己的
     if (user.role !== 'admin' && video.uploadedByName !== user.username) {
       alert('您没有权限删除此视频');
       return;
     }
     
     if (confirm('确定要删除该视频吗?')) {
-      videoService.delete(videoId);
-      loadVideos();
+      try {
+        await videoService.delete(videoId);
+        loadVideos();
+      } catch (e: any) {
+        alert('删除失败: ' + (e.message || e));
+      }
     }
   };
 

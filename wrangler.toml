@@ -8,6 +8,12 @@ account_id = "09a7ba6e7eae31ff8fdee2255891fa52"
 binding = "R2_BUCKET"
 bucket_name = "my-r2-nxc"
 
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "video-platform-db"
+database_id = "a736be56-ac8a-4437-ac48-50fa98d3740d"
+
 # 公共访问域名（部署 Worker 后填入）
 [vars]
 ALLOWED_ORIGINS = "*"

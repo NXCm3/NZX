@@ -43,25 +43,33 @@ export default function VideoPlayer() {
     }
   }, [id, user]);
 
-  const loadVideo = (videoId: string) => {
-    const foundVideo = videoService.getById(videoId);
-    if (foundVideo) {
-      setVideo(foundVideo);
-      // 增加观看次数
-      videoService.incrementViews(videoId);
-    } else {
+  const loadVideo = async (videoId: string) => {
+    try {
+      const foundVideo = await videoService.getById(videoId);
+      if (foundVideo) {
+        setVideo(foundVideo);
+        videoService.incrementViews(videoId);
+      } else {
+        navigate('/');
+      }
+    } catch (e: any) {
+      console.error('加载视频失败:', e);
       navigate('/');
     }
   };
 
-  const loadComments = (videoId: string) => {
-    const videoComments = commentService.getByVideoId(videoId);
-    setComments(videoComments.sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    ));
+  const loadComments = async (videoId: string) => {
+    try {
+      const videoComments = await commentService.getByVideoId(videoId);
+      setComments(videoComments.sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      ));
+    } catch (e: any) {
+      console.error('加载评论失败:', e);
+    }
   };
 
-  const handleAddComment = () => {
+  const handleAddComment = async () => {
     if (!newComment.trim()) return;
     
     if (!user) {
@@ -76,7 +84,6 @@ export default function VideoPlayer() {
       content: newComment.trim(),
     };
 
-    // 如果是回复评论
     if (replyingTo) {
       const parentComment = comments.find(c => c.id === replyingTo);
       if (parentComment) {
@@ -85,10 +92,14 @@ export default function VideoPlayer() {
       }
     }
 
-    commentService.add(commentData);
-    setNewComment('');
-    setReplyingTo(null);
-    loadComments(id!);
+    try {
+      await commentService.add(commentData);
+      setNewComment('');
+      setReplyingTo(null);
+      loadComments(id!);
+    } catch (e: any) {
+      alert('评论失败: ' + (e.message || e));
+    }
   };
 
   const handleReply = (commentId: string) => {
@@ -104,10 +115,14 @@ export default function VideoPlayer() {
     setReplyingTo(null);
   };
 
-  const handleDeleteComment = (commentId: string) => {
+  const handleDeleteComment = async (commentId: string) => {
     if (confirm('确定要删除这条评论吗?')) {
-      commentService.delete(commentId);
-      loadComments(id!);
+      try {
+        await commentService.delete(commentId);
+        loadComments(id!);
+      } catch (e: any) {
+        alert('删除失败: ' + (e.message || e));
+      }
     }
   };
 

@@ -22,7 +22,7 @@ import { videoService, commentService, userService, onlineService, type User as 
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<'users' | 'videos' | 'stats'>('stats');
-  const [videos, setVideos] = useState(videoService.getAll());
+  const [videos, setVideos] = useState<any[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [onlineCount, setOnlineCount] = useState(0);
   const [totalViews, setTotalViews] = useState(0);
@@ -50,54 +50,45 @@ export default function AdminDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  const refreshData = () => {
-    setVideos(videoService.getAll());
-    // 获取所有用户包括管理员
-    const allUsers = userService.getAllIncludingAdmin();
-    // 更新在线状态
-    allUsers.forEach(u => {
-      const isOnline = onlineService.getOnlineCount() > 0; // 简化处理
-      if (u.id !== 'admin-001') {
-        const userData = JSON.parse(localStorage.getItem('users') || '[]');
-        const found = userData.find((usr: any) => usr.id === u.id);
-        if (found) {
-          u.isOnline = found.isOnline;
-          u.lastSeen = found.lastSeen;
-        }
+  const refreshData = async () => {
+    try {
+      const vids = await videoService.getAll();
+      setVideos(vids);
+      const usrs = await userService.getAllIncludingAdmin();
+      setUsers(usrs);
+      const oc = await onlineService.getOnlineCount();
+      setOnlineCount(oc);
+      const total = vids.reduce((sum: number, v: any) => sum + (v.views || 0), 0);
+      setTotalViews(total);
+      if (user) {
+        await onlineService.updateActivity(user.id);
       }
-    });
-    setUsers(allUsers);
-    setOnlineCount(onlineService.getOnlineCount());
-    const total = videoService.getAll().reduce((sum, v) => sum + v.views, 0);
-    setTotalViews(total);
-    
-    // 更新当前用户活动状态
-    if (user) {
-      onlineService.updateActivity(user.id);
+    } catch (e: any) {
+      console.error('Refresh data error:', e);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (user) {
-      onlineService.removeUser(user.id);
+      await onlineService.removeUser(user.id);
     }
     logout();
     navigate('/login');
   };
 
-  const handleAddUser = () => {
+  const handleAddUser = async () => {
     if (!newUsername || !newPassword) {
       alert('请填写用户名和密码');
       return;
     }
-    
+
     if (newPassword.length < 6) {
       alert('密码长度至少6位');
       return;
     }
-    
+
     try {
-      userService.add({
+      await userService.add({
         username: newUsername,
         password: newPassword,
         role: 'user',
@@ -108,22 +99,22 @@ export default function AdminDashboard() {
       refreshData();
       alert('用户添加成功');
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || '添加失败');
     }
   };
 
-  const handleDeleteUser = (userId: string, username: string) => {
+  const handleDeleteUser = async (userId: string, username: string) => {
     if (userId === 'admin-001') {
       alert('不能删除管理员账号');
       return;
     }
     if (confirm(`确定要删除用户 "${username}" 吗?\n该用户上传的所有视频也会被删除。`)) {
       try {
-        userService.delete(userId);
+        await userService.delete(userId);
         refreshData();
         alert('用户已删除');
       } catch (err: any) {
-        alert(err.message);
+        alert(err.message || '删除失败');
       }
     }
   };
@@ -135,22 +126,36 @@ export default function AdminDashboard() {
     }
 
     try {
-      // 将文件转换为base64
-      const videoBase64 = await fileToBase64(videoFile);
-      let thumbnailBase64 = '';
-      
+      const formData = new FormData();
+      formData.append('file', videoFile);
+      const res = await fetch('https://video-upload-api.nxc34307.workers.dev/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('视频上传失败');
+      const videoInfo = await res.json();
+
+      let thumbnailUrl = videoInfo.url;
       if (thumbnailFile) {
-        thumbnailBase64 = await fileToBase64(thumbnailFile);
+        const td = new FormData();
+        td.append('file', thumbnailFile);
+        const tres = await fetch('https://video-upload-api.nxc34307.workers.dev/upload', {
+          method: 'POST',
+          body: td,
+        });
+        if (tres.ok) {
+          const tinfo = await tres.json();
+          thumbnailUrl = tinfo.url;
+        }
       } else {
-        // 如果没有缩略图,使用默认图片
-        thumbnailBase64 = 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=400&h=225&fit=crop';
+        thumbnailUrl = 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=400&h=225&fit=crop';
       }
 
-      videoService.add({
+      await videoService.add({
         title: videoTitle,
         description: videoDescription,
-        thumbnail: thumbnailBase64,
-        videoUrl: videoBase64,
+        thumbnail: thumbnailUrl,
+        videoUrl: videoInfo.url,
         uploadedBy: user?.id || '',
         uploadedByName: user?.username || 'admin',
       });
@@ -163,14 +168,18 @@ export default function AdminDashboard() {
       refreshData();
       alert('视频上传成功');
     } catch (err) {
-      alert('视频上传失败');
+      alert('视频上传失败: ' + (err as any).message);
     }
   };
 
-  const handleDeleteVideo = (videoId: string) => {
+  const handleDeleteVideo = async (videoId: string) => {
     if (confirm('确定要删除该视频吗?相关评论也会被删除。')) {
-      videoService.delete(videoId);
-      refreshData();
+      try {
+        await videoService.delete(videoId);
+        refreshData();
+      } catch (e: any) {
+        alert('删除失败: ' + (e.message || e));
+      }
     }
   };
 
@@ -192,16 +201,20 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     if (selectedVideos.size === 0) {
       alert('请先选择要删除的视频');
       return;
     }
     if (confirm(`确定要删除选中的 ${selectedVideos.size} 个视频吗?`)) {
-      videoService.deleteMultiple(Array.from(selectedVideos));
-      setSelectedVideos(new Set());
-      refreshData();
-      alert('批量删除成功');
+      try {
+        await videoService.deleteMultiple(Array.from(selectedVideos));
+        setSelectedVideos(new Set());
+        refreshData();
+        alert('批量删除成功');
+      } catch (e: any) {
+        alert('批量删除失败: ' + (e.message || e));
+      }
     }
   };
 
@@ -237,7 +250,7 @@ export default function AdminDashboard() {
   };
 
   const getUserVideoCount = (username: string) => {
-    return userService.getUserVideoCount(username);
+    return videos.filter(v => v.uploadedByName === username).length;
   };
 
   return (

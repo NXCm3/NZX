@@ -112,8 +112,8 @@ export default function UploadVideo() {
       setUploadStatus('success');
       setUploadProgress(100);
 
-      // 保存到本地存储(只存 URL)
-      videoService.add({
+      // 保存到数据库(只存 URL)
+      await videoService.add({
         title: videoTitle,
         description: videoDescription,
         thumbnail: thumbnailUrl,
