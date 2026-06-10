@@ -1,5 +1,6 @@
 export interface Env {
   R2_BUCKET: R2Bucket;
+  R2_PUBLIC_URL?: string;
 }
 
 export interface UploadRequest {
@@ -50,7 +51,8 @@ export default {
       });
 
       // 返回文件 URL
-      const fileUrl = `https://r2.your-domain.com/${filename}`;
+      const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+      const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
 
       return new Response(
         JSON.stringify({
