@@ -180,7 +180,11 @@ export const userService = {
       };
     }
     const users = JSON.parse(localStorage.getItem('users') || '[]');
-    return users.find(u => u.id === id);
+    const user = users.find(u => u.id === id);
+    if (user) {
+      return user;
+    }
+    return undefined;
   },
 
   authenticate: (username: string, password: string): User | null => {

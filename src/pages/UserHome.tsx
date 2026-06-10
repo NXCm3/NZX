@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { LogIn, Video as VideoIcon, Eye, Upload, Trash2 } from 'lucide-react';
+import { LogIn, LogOut, Video as VideoIcon, Eye, Upload, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, onlineService } from '../services/storage';
 import type { Video } from '../services/storage';
@@ -9,19 +9,31 @@ import type { Video } from '../services/storage';
 export default function UserHome() {
   const [videos, setVideos] = useState<Video[]>([]);
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   useEffect(() => {
     loadVideos();
-    
-    // 更新在线状态
+
+    // 每3秒轮询一次新视频(所有用户包括未登录)
+    const videoInterval = setInterval(() => {
+      loadVideos();
+    }, 3000);
+
+    // 更新在线状态(仅登录用户)
+    let onlineInterval: NodeJS.Timeout | null = null;
     if (user) {
       onlineService.updateActivity(user.id);
-      const interval = setInterval(() => {
+      onlineInterval = setInterval(() => {
         onlineService.updateActivity(user.id);
       }, 30000); // 每30秒更新一次
-      return () => clearInterval(interval);
     }
+
+    return () => {
+      clearInterval(videoInterval);
+      if (onlineInterval) {
+        clearInterval(onlineInterval);
+      }
+    };
   }, [user]);
 
   const loadVideos = () => {
@@ -65,6 +77,14 @@ export default function UserHome() {
     return video.uploadedByName === user.username;
   };
 
+  const handleLogout = () => {
+    if (user) {
+      onlineService.removeUser(user.id);
+    }
+    logout();
+    navigate('/');
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
@@ -78,26 +98,35 @@ export default function UserHome() {
             <div className="flex items-center gap-4">
               {user ? (
                 <>
-                  <span className="text-gray-600 dark:text-gray-400">
+                  <span className="text-gray-600 dark:text-gray-400 hidden sm:inline">
                     欢迎, {user.username}
                   </span>
                   {canUploadVideo && (
                     <button
                       onClick={() => navigate('/upload')}
-                      className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                      className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
                     >
-                      <Upload size={18} />
-                      上传视频
+                      <Upload size={16} />
+                      <span className="hidden sm:inline">上传视频</span>
                     </button>
                   )}
                   {user.role === 'admin' && (
                     <button
                       onClick={() => navigate('/admin')}
-                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+                      className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors text-sm"
                     >
-                      管理后台
+                      <span className="hidden sm:inline">管理后台</span>
+                      <span className="sm:hidden">管理</span>
                     </button>
                   )}
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
+                    title="退出登录"
+                  >
+                    <LogOut size={16} />
+                    <span className="hidden sm:inline">退出</span>
+                  </button>
                 </>
               ) : (
                 <button

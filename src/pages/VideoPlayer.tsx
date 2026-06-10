@@ -19,11 +19,27 @@ export default function VideoPlayer() {
     if (id) {
       loadVideo(id);
       loadComments(id);
-      
-      // 更新在线状态
+
+      // 每3秒轮询一次新评论(所有用户包括未登录)
+      const commentInterval = setInterval(() => {
+        loadComments(id!);
+      }, 3000);
+
+      // 更新在线状态(仅登录用户)
+      let onlineInterval: NodeJS.Timeout | null = null;
       if (user) {
         onlineService.updateActivity(user.id);
+        onlineInterval = setInterval(() => {
+          onlineService.updateActivity(user.id);
+        }, 30000);
       }
+
+      return () => {
+        clearInterval(commentInterval);
+        if (onlineInterval) {
+          clearInterval(onlineInterval);
+        }
+      };
     }
   }, [id, user]);
 

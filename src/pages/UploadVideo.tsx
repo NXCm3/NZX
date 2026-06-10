@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Upload as UploadIcon, X, Camera, Film, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Upload as UploadIcon, X, Camera, Film, Image as ImageIcon, AlertCircle, FolderOpen } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService } from '../services/storage';
 
@@ -10,13 +10,17 @@ export default function UploadVideo() {
   const [videoDescription, setVideoDescription] = useState('');
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [autoThumbnail, setAutoThumbnail] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [showPermissionTip, setShowPermissionTip] = useState(true);
   const navigate = useNavigate();
   const { user } = useAuth();
   
-  const videoInputRef = useRef<HTMLInputElement>(null);
-  const thumbnailInputRef = useRef<HTMLInputElement>(null);
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
+  const videoCameraInputRef = useRef<HTMLInputElement>(null);
+  const thumbnailFileInputRef = useRef<HTMLInputElement>(null);
+  const thumbnailCameraInputRef = useRef<HTMLInputElement>(null);
+  const videoElementRef = useRef<HTMLVideoElement>(null);
 
   // 如果没有登录,重定向到登录页
   if (!user) {
@@ -39,6 +43,9 @@ export default function UploadVideo() {
       
       if (thumbnailFile) {
         thumbnailBase64 = await fileToBase64(thumbnailFile);
+      } else if (autoThumbnail) {
+        // 使用自动提取的视频第一帧
+        thumbnailBase64 = autoThumbnail;
       } else {
         // 如果没有缩略图,使用默认图片
         thumbnailBase64 = 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=400&h=225&fit=crop';
@@ -71,26 +78,73 @@ export default function UploadVideo() {
     });
   };
 
+  // 提取视频第一帧作为缩略图
+  const extractVideoThumbnail = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.playsInline = true;
+      video.muted = true;
+      
+      const url = URL.createObjectURL(file);
+      video.src = url;
+      
+      video.onloadeddata = () => {
+        // 跳转到第一帧
+        video.currentTime = 0.1;
+      };
+      
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 360;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.8);
+          URL.revokeObjectURL(url);
+          resolve(thumbnail);
+        } else {
+          URL.revokeObjectURL(url);
+          reject(new Error('无法创建canvas上下文'));
+        }
+      };
+      
+      video.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('视频加载失败'));
+      };
+    });
+  };
+
+  const handleVideoSelect = async (file: File | null, isFromCamera: boolean = false) => {
+    if (!file) return;
+    setVideoFile(file);
+    
+    // 如果没有手动设置缩略图,自动提取视频第一帧
+    if (!thumbnailFile) {
+      try {
+        const thumbnail = await extractVideoThumbnail(file);
+        setAutoThumbnail(thumbnail);
+      } catch (err) {
+        console.error('提取视频封面失败:', err);
+        setAutoThumbnail(null);
+      }
+    }
+  };
+
   const clearVideoFile = () => {
     setVideoFile(null);
-    if (videoInputRef.current) {
-      videoInputRef.current.value = '';
-    }
+    setAutoThumbnail(null);
+    if (videoFileInputRef.current) videoFileInputRef.current.value = '';
+    if (videoCameraInputRef.current) videoCameraInputRef.current.value = '';
   };
 
   const clearThumbnailFile = () => {
     setThumbnailFile(null);
-    if (thumbnailInputRef.current) {
-      thumbnailInputRef.current.value = '';
-    }
-  };
-
-  const triggerVideoSelect = () => {
-    videoInputRef.current?.click();
-  };
-
-  const triggerThumbnailSelect = () => {
-    thumbnailInputRef.current?.click();
+    setAutoThumbnail(null);
+    if (thumbnailFileInputRef.current) thumbnailFileInputRef.current.value = '';
+    if (thumbnailCameraInputRef.current) thumbnailCameraInputRef.current.value = '';
   };
 
   return (
@@ -124,10 +178,7 @@ export default function UploadVideo() {
             <AlertCircle className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" size={20} />
             <div className="flex-1">
               <p className="text-sm text-blue-800 dark:text-blue-300">
-                <strong>需要访问权限：</strong>点击下方按钮时，浏览器会请求访问您的相册/文件。请点击"允许"以选择视频和图片。
-              </p>
-              <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                手机端：可以选择从相机拍摄或从相册选择
+                <strong>需要访问权限：</strong>点击下方按钮时，浏览器会请求访问您的相机或相册。请点击"允许"以选择文件。
               </p>
             </div>
             <button
@@ -139,6 +190,9 @@ export default function UploadVideo() {
           </div>
         </motion.div>
       )}
+
+      {/* 隐藏的视频元素用于提取封面 */}
+      <video ref={videoElementRef} className="hidden" />
 
       {/* 主要内容 */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -175,33 +229,45 @@ export default function UploadVideo() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
                 视频文件 *
               </label>
+              
+              {/* 隐藏的input */}
               <input
-                ref={videoInputRef}
+                ref={videoFileInputRef}
+                type="file"
+                accept="video/*"
+                onChange={(e) => handleVideoSelect(e.target.files?.[0] || null, false)}
+                className="hidden"
+              />
+              <input
+                ref={videoCameraInputRef}
                 type="file"
                 accept="video/*"
                 capture="environment"
-                onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
+                onChange={(e) => handleVideoSelect(e.target.files?.[0] || null, true)}
                 className="hidden"
-                id="video-upload"
               />
+              
               {!videoFile ? (
-                <div 
-                  onClick={triggerVideoSelect}
-                  className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 sm:p-8 text-center hover:border-blue-500 transition-colors cursor-pointer active:bg-blue-50 dark:active:bg-blue-900/10"
-                >
-                  <Film className="mx-auto text-gray-400 mb-3" size={48} />
-                  <p className="text-gray-700 dark:text-gray-300 font-medium mb-1">
-                    点击选择视频
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    支持从相册选择或相机拍摄
-                  </p>
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                    MP4, WebM, MOV 等格式
-                  </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => videoCameraInputRef.current?.click()}
+                    className="border-2 border-dashed border-blue-300 dark:border-blue-700 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer"
+                  >
+                    <Camera className="mx-auto text-blue-500 mb-2" size={32} />
+                    <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">拍照录制</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">使用相机拍摄</p>
+                  </button>
+                  <button
+                    onClick={() => videoFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer"
+                  >
+                    <FolderOpen className="mx-auto text-gray-500 mb-2" size={32} />
+                    <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">从文件选择</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">从相册选择</p>
+                  </button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
@@ -225,43 +291,68 @@ export default function UploadVideo() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
                 缩略图 (可选)
               </label>
+              
+              {/* 隐藏的input */}
               <input
-                ref={thumbnailInputRef}
+                ref={thumbnailFileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setThumbnailFile(file);
+                  if (file) setAutoThumbnail(null);
+                }}
+                className="hidden"
+              />
+              <input
+                ref={thumbnailCameraInputRef}
                 type="file"
                 accept="image/*"
                 capture="environment"
-                onChange={(e) => setThumbnailFile(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setThumbnailFile(file);
+                  if (file) setAutoThumbnail(null);
+                }}
                 className="hidden"
-                id="thumbnail-upload"
               />
-              {!thumbnailFile ? (
-                <div 
-                  onClick={triggerThumbnailSelect}
-                  className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center hover:border-blue-500 transition-colors cursor-pointer active:bg-blue-50 dark:active:bg-blue-900/10"
-                >
-                  <ImageIcon className="mx-auto text-gray-400 mb-2" size={32} />
-                  <p className="text-gray-700 dark:text-gray-300 text-sm font-medium">
-                    点击选择图片
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    从相册选择或相机拍摄
-                  </p>
+              
+              {!thumbnailFile && !autoThumbnail ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => thumbnailCameraInputRef.current?.click()}
+                    className="border-2 border-dashed border-green-300 dark:border-green-700 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer"
+                  >
+                    <Camera className="mx-auto text-green-500 mb-2" size={24} />
+                    <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">拍照</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">使用相机拍摄</p>
+                  </button>
+                  <button
+                    onClick={() => thumbnailFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer"
+                  >
+                    <FolderOpen className="mx-auto text-gray-500 mb-2" size={24} />
+                    <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">从文件选择</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">从相册选择</p>
+                  </button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <img
-                      src={URL.createObjectURL(thumbnailFile)}
+                      src={thumbnailFile ? URL.createObjectURL(thumbnailFile) : autoThumbnail || ''}
                       alt="预览"
                       className="w-16 h-16 object-cover rounded shrink-0"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 dark:text-white truncate">{thumbnailFile.name}</p>
+                      <p className="font-medium text-gray-900 dark:text-white truncate">
+                        {thumbnailFile ? thumbnailFile.name : '视频第一帧(自动)'}
+                      </p>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {(thumbnailFile.size / 1024).toFixed(2)} KB
+                        {thumbnailFile ? `${(thumbnailFile.size / 1024).toFixed(2)} KB` : '自动生成'}
                       </p>
                     </div>
                   </div>
@@ -272,6 +363,12 @@ export default function UploadVideo() {
                     <X size={20} />
                   </button>
                 </div>
+              )}
+              
+              {autoThumbnail && !thumbnailFile && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  * 已自动使用视频第一帧作为封面，你也可以点击上方按钮自定义封面
+                </p>
               )}
             </div>
 
