@@ -5,8 +5,8 @@ import { ArrowLeft, Upload as UploadIcon, X, Camera, Film, Image as ImageIcon, A
 import { useAuth } from '../contexts/AuthContext';
 import { videoService } from '../services/storage';
 
-// R2 上传配置
-const R2_UPLOAD_URL = 'https://video-upload-api.nxc34307.workers.dev/upload';
+// R2 上传配置 (同域 Pages Functions)
+const R2_UPLOAD_URL = '/api/upload';
 const R2_PUBLIC_URL = 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
 
 export default function UploadVideo() {

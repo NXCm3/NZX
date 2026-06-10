@@ -1,6 +1,6 @@
-// Cloudflare D1 + R2 API 客户端 - 通过 Worker API 操作数据
+// Cloudflare D1 + R2 API 客户端 - 通过 Pages Functions 同源调用 (/api/*)
 
-const API_BASE = 'https://video-upload-api.nxc34307.workers.dev';
+const API_BASE = '/api';
 
 export interface Video {
   id: string;

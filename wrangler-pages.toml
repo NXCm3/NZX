@@ -1,0 +1,20 @@
+name = "video-platform"
+pages_project = { build_command = "npm run build", build_output_dir = "dist" }
+compatibility_date = "2024-01-01"
+account_id = "09a7ba6e7eae31ff8fdee225589f6aa30ae9bad4a9"
+
+# R2 Bucket 绑定（Pages Functions 中通过 env.R2_BUCKET 访问）
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "my-r2-nxc"
+
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "video-platform-db"
+database_id = "a736be56-ac8a-4437-ac48-50fa98d3740d"
+
+# 环境变量
+[vars]
+ALLOWED_ORIGINS = "*"
+R2_PUBLIC_URL = "https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev"

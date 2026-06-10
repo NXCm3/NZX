@@ -128,7 +128,7 @@ export default function AdminDashboard() {
     try {
       const formData = new FormData();
       formData.append('file', videoFile);
-      const res = await fetch('https://video-upload-api.nxc34307.workers.dev/upload', {
+      const res = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
@@ -139,7 +139,7 @@ export default function AdminDashboard() {
       if (thumbnailFile) {
         const td = new FormData();
         td.append('file', thumbnailFile);
-        const tres = await fetch('https://video-upload-api.nxc34307.workers.dev/upload', {
+        const tres = await fetch('/api/upload', {
           method: 'POST',
           body: td,
         });

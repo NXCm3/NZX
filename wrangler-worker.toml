@@ -1,0 +1,19 @@
+# 独立 Worker 版本部署配置（可选，保持 video-upload-api.workers.dev 可用）
+# 部署命令:  wrangler deploy -c wrangler-worker.toml
+name = "video-upload-api"
+main = "workers/upload.ts"
+compatibility_date = "2024-01-01"
+account_id = "09a7ba6e7eae31ff8fdee225589f1a52"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "my-r2-nxc"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "video-platform-db"
+database_id = "a736be56-ac8a-4437-ac48-50fa98d3740d"
+
+[vars]
+ALLOWED_ORIGINS = "*"
+R2_PUBLIC_URL = "https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev"
