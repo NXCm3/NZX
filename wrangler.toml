@@ -1,0 +1,12 @@
+name = "video-upload-api"
+main = "functions/upload.ts"
+compatibility_date = "2024-01-01"
+
+# R2 Bucket 绑定
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "video-storage"
+
+# CORS 配置
+[vars]
+ALLOWED_ORIGINS = "*"

@@ -1,12 +1,22 @@
 [
   {
-    "content": "添加拍照和文件选择两个选项",
+    "content": "创建 R2 上传 Edge Function",
     "id": "1",
     "status": "completed"
   },
   {
-    "content": "自动提取视频第一帧作为封面",
+    "content": "修改前端使用 R2 上传",
     "id": "2",
+    "status": "completed"
+  },
+  {
+    "content": "添加上传进度显示",
+    "id": "3",
+    "status": "completed"
+  },
+  {
+    "content": "更新存储服务适配 R2",
+    "id": "4",
     "status": "completed"
   }
 ]

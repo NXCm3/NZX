@@ -1,9 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { ArrowLeft, Upload as UploadIcon, X, Camera, Film, Image as ImageIcon, AlertCircle, FolderOpen } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowLeft, Upload as UploadIcon, X, Camera, Film, Image as ImageIcon, AlertCircle, FolderOpen, Loader2, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService } from '../services/storage';
+
+// R2 上传配置 - 替换为你的实际域名
+const R2_UPLOAD_URL = 'https://your-worker.your-subdomain.workers.dev/upload';
+const R2_PUBLIC_URL = 'https://pub-xxxxx.r2.dev'; // 替换为你的 R2 公共访问域名
 
 export default function UploadVideo() {
   const [videoTitle, setVideoTitle] = useState('');
@@ -12,6 +16,9 @@ export default function UploadVideo() {
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [autoThumbnail, setAutoThumbnail] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
   const [showPermissionTip, setShowPermissionTip] = useState(true);
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -20,13 +27,48 @@ export default function UploadVideo() {
   const videoCameraInputRef = useRef<HTMLInputElement>(null);
   const thumbnailFileInputRef = useRef<HTMLInputElement>(null);
   const thumbnailCameraInputRef = useRef<HTMLInputElement>(null);
-  const videoElementRef = useRef<HTMLVideoElement>(null);
 
-  // 如果没有登录,重定向到登录页
   if (!user) {
     navigate('/login');
     return null;
   }
+
+  // 上传文件到 R2
+  const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && onProgress) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          onProgress(progress);
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            resolve(response.url);
+          } catch (e) {
+            reject(new Error('解析响应失败'));
+          }
+        } else {
+          reject(new Error(`上传失败: ${xhr.status}`));
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('网络错误'));
+      });
+
+      xhr.open('POST', R2_UPLOAD_URL);
+      xhr.send(formData);
+    });
+  };
 
   const handleUpload = async () => {
     if (!videoTitle || !videoFile) {
@@ -34,48 +76,65 @@ export default function UploadVideo() {
       return;
     }
 
+    // 检查文件大小 (10GB = 10 * 1024 * 1024 * 1024)
+    const maxSize = 10 * 1024 * 1024 * 1024;
+    if (videoFile.size > maxSize) {
+      alert('视频文件不能超过 10GB');
+      return;
+    }
+
     setUploading(true);
+    setUploadStatus('uploading');
+    setUploadProgress(0);
+    setErrorMessage('');
 
     try {
-      // 将文件转换为base64
-      const videoBase64 = await fileToBase64(videoFile);
-      let thumbnailBase64 = '';
-      
+      // 上传视频到 R2
+      setUploadStatus('uploading');
+      const videoUrl = await uploadToR2(videoFile, (progress) => {
+        setUploadProgress(progress);
+      });
+
+      // 上传缩略图到 R2
+      let thumbnailUrl = '';
       if (thumbnailFile) {
-        thumbnailBase64 = await fileToBase64(thumbnailFile);
+        thumbnailUrl = await uploadToR2(thumbnailFile);
       } else if (autoThumbnail) {
-        // 使用自动提取的视频第一帧
-        thumbnailBase64 = autoThumbnail;
+        // 如果是自动提取的 base64 缩略图,转换为 blob 后上传
+        const response = await fetch(autoThumbnail);
+        const blob = await response.blob();
+        const file = new File([blob], 'thumbnail.jpg', { type: 'image/jpeg' });
+        thumbnailUrl = await uploadToR2(file);
       } else {
-        // 如果没有缩略图,使用默认图片
-        thumbnailBase64 = 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=400&h=225&fit=crop';
+        thumbnailUrl = 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=400&h=225&fit=crop';
       }
 
+      setUploadStatus('success');
+      setUploadProgress(100);
+
+      // 保存到本地存储(只存 URL)
       videoService.add({
         title: videoTitle,
         description: videoDescription,
-        thumbnail: thumbnailBase64,
-        videoUrl: videoBase64,
+        thumbnail: thumbnailUrl,
+        videoUrl: videoUrl,
         uploadedBy: user.id,
         uploadedByName: user.username,
       });
 
-      alert('视频上传成功');
-      navigate('/');
-    } catch (err) {
-      alert('视频上传失败,请重试');
+      // 延迟跳转,让用户看到成功状态
+      setTimeout(() => {
+        alert('视频上传成功!');
+        navigate('/');
+      }, 1000);
+
+    } catch (err: any) {
+      setUploadStatus('error');
+      setErrorMessage(err.message || '上传失败,请重试');
+      console.error('Upload error:', err);
     } finally {
       setUploading(false);
     }
-  };
-
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = error => reject(error);
-    });
   };
 
   // 提取视频第一帧作为缩略图
@@ -90,23 +149,22 @@ export default function UploadVideo() {
       video.src = url;
       
       video.onloadeddata = () => {
-        // 跳转到第一帧
         video.currentTime = 0.1;
       };
       
       video.onseeked = () => {
         const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 360;
+        canvas.width = Math.min(video.videoWidth || 640, 640);
+        canvas.height = Math.min(video.videoHeight || 360, 360);
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const thumbnail = canvas.toDataURL('image/jpeg', 0.8);
+          const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
           URL.revokeObjectURL(url);
           resolve(thumbnail);
         } else {
           URL.revokeObjectURL(url);
-          reject(new Error('无法创建canvas上下文'));
+          reject(new Error('无法创建canvas'));
         }
       };
       
@@ -117,17 +175,25 @@ export default function UploadVideo() {
     });
   };
 
-  const handleVideoSelect = async (file: File | null, isFromCamera: boolean = false) => {
+  const handleVideoSelect = async (file: File | null) => {
     if (!file) return;
+    
+    // 检查文件大小
+    const maxSize = 10 * 1024 * 1024 * 1024;
+    if (file.size > maxSize) {
+      alert('视频文件不能超过 10GB');
+      return;
+    }
+    
     setVideoFile(file);
     
-    // 如果没有手动设置缩略图,自动提取视频第一帧
+    // 自动提取封面
     if (!thumbnailFile) {
       try {
         const thumbnail = await extractVideoThumbnail(file);
         setAutoThumbnail(thumbnail);
       } catch (err) {
-        console.error('提取视频封面失败:', err);
+        console.error('提取封面失败:', err);
         setAutoThumbnail(null);
       }
     }
@@ -149,7 +215,6 @@ export default function UploadVideo() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* 顶部导航 */}
       <header className="bg-white dark:bg-gray-800 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center h-16">
@@ -160,14 +225,11 @@ export default function UploadVideo() {
               <ArrowLeft size={20} />
               <span className="hidden sm:inline">返回首页</span>
             </button>
-            <h1 className="ml-4 text-xl font-bold text-gray-900 dark:text-white">
-              上传视频
-            </h1>
+            <h1 className="ml-4 text-xl font-bold text-gray-900 dark:text-white">上传视频</h1>
           </div>
         </div>
       </header>
 
-      {/* 权限提示 */}
       {showPermissionTip && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
@@ -178,23 +240,16 @@ export default function UploadVideo() {
             <AlertCircle className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" size={20} />
             <div className="flex-1">
               <p className="text-sm text-blue-800 dark:text-blue-300">
-                <strong>需要访问权限：</strong>点击下方按钮时，浏览器会请求访问您的相机或相册。请点击"允许"以选择文件。
+                <strong>提示:</strong> 支持最大 10GB 的视频文件。大文件上传可能需要较长时间,请保持页面打开。
               </p>
             </div>
-            <button
-              onClick={() => setShowPermissionTip(false)}
-              className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
-            >
+            <button onClick={() => setShowPermissionTip(false)} className="text-blue-600 dark:text-blue-400">
               <X size={18} />
             </button>
           </div>
         </motion.div>
       )}
 
-      {/* 隐藏的视频元素用于提取封面 */}
-      <video ref={videoElementRef} className="hidden" />
-
-      {/* 主要内容 */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -203,67 +258,43 @@ export default function UploadVideo() {
         >
           <div className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                视频标题 *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">视频标题 *</label>
               <input
                 type="text"
                 value={videoTitle}
                 onChange={(e) => setVideoTitle(e.target.value)}
                 placeholder="请输入视频标题"
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                disabled={uploading}
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                视频描述
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">视频描述</label>
               <textarea
                 value={videoDescription}
                 onChange={(e) => setVideoDescription(e.target.value)}
                 placeholder="请输入视频描述(可选)"
                 rows={3}
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                disabled={uploading}
+                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none disabled:opacity-50"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                视频文件 *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">视频文件 *</label>
               
-              {/* 隐藏的input */}
-              <input
-                ref={videoFileInputRef}
-                type="file"
-                accept="video/*"
-                onChange={(e) => handleVideoSelect(e.target.files?.[0] || null, false)}
-                className="hidden"
-              />
-              <input
-                ref={videoCameraInputRef}
-                type="file"
-                accept="video/*"
-                capture="environment"
-                onChange={(e) => handleVideoSelect(e.target.files?.[0] || null, true)}
-                className="hidden"
-              />
+              <input ref={videoFileInputRef} type="file" accept="video/*" onChange={(e) => handleVideoSelect(e.target.files?.[0] || null)} className="hidden" />
+              <input ref={videoCameraInputRef} type="file" accept="video/*" capture="environment" onChange={(e) => handleVideoSelect(e.target.files?.[0] || null)} className="hidden" />
               
               {!videoFile ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => videoCameraInputRef.current?.click()}
-                    className="border-2 border-dashed border-blue-300 dark:border-blue-700 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer"
-                  >
+                  <button onClick={() => videoCameraInputRef.current?.click()} disabled={uploading} className="border-2 border-dashed border-blue-300 dark:border-blue-700 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                     <Camera className="mx-auto text-blue-500 mb-2" size={32} />
                     <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">拍照录制</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">使用相机拍摄</p>
                   </button>
-                  <button
-                    onClick={() => videoFileInputRef.current?.click()}
-                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer"
-                  >
+                  <button onClick={() => videoFileInputRef.current?.click()} disabled={uploading} className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                     <FolderOpen className="mx-auto text-gray-500 mb-2" size={32} />
                     <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">从文件选择</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">从相册选择</p>
@@ -275,65 +306,32 @@ export default function UploadVideo() {
                     <Film className="text-blue-600 shrink-0" size={24} />
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-gray-900 dark:text-white truncate">{videoFile.name}</p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {(videoFile.size / 1024 / 1024).toFixed(2)} MB
-                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{(videoFile.size / 1024 / 1024).toFixed(2)} MB</p>
                     </div>
                   </div>
-                  <button
-                    onClick={clearVideoFile}
-                    className="text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 shrink-0 ml-2"
-                  >
-                    <X size={20} />
-                  </button>
+                  {!uploading && (
+                    <button onClick={clearVideoFile} className="text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 shrink-0 ml-2">
+                      <X size={20} />
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                缩略图 (可选)
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">缩略图 (可选)</label>
               
-              {/* 隐藏的input */}
-              <input
-                ref={thumbnailFileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={(e) => {
-                  const file = e.target.files?.[0] || null;
-                  setThumbnailFile(file);
-                  if (file) setAutoThumbnail(null);
-                }}
-                className="hidden"
-              />
-              <input
-                ref={thumbnailCameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={(e) => {
-                  const file = e.target.files?.[0] || null;
-                  setThumbnailFile(file);
-                  if (file) setAutoThumbnail(null);
-                }}
-                className="hidden"
-              />
+              <input ref={thumbnailFileInputRef} type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0] || null; setThumbnailFile(file); if (file) setAutoThumbnail(null); }} className="hidden" disabled={uploading} />
+              <input ref={thumbnailCameraInputRef} type="file" accept="image/*" capture="environment" onChange={(e) => { const file = e.target.files?.[0] || null; setThumbnailFile(file); if (file) setAutoThumbnail(null); }} className="hidden" disabled={uploading} />
               
-              {!thumbnailFile && !autoThumbnail ? (
+              {(!thumbnailFile && !autoThumbnail) ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => thumbnailCameraInputRef.current?.click()}
-                    className="border-2 border-dashed border-green-300 dark:border-green-700 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer"
-                  >
+                  <button onClick={() => thumbnailCameraInputRef.current?.click()} disabled={uploading} className="border-2 border-dashed border-green-300 dark:border-green-700 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                     <Camera className="mx-auto text-green-500 mb-2" size={24} />
                     <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">拍照</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">使用相机拍摄</p>
                   </button>
-                  <button
-                    onClick={() => thumbnailFileInputRef.current?.click()}
-                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer"
-                  >
+                  <button onClick={() => thumbnailFileInputRef.current?.click()} disabled={uploading} className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center hover:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                     <FolderOpen className="mx-auto text-gray-500 mb-2" size={24} />
                     <p className="text-gray-700 dark:text-gray-300 font-medium text-sm">从文件选择</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">从相册选择</p>
@@ -342,35 +340,70 @@ export default function UploadVideo() {
               ) : (
                 <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <img
-                      src={thumbnailFile ? URL.createObjectURL(thumbnailFile) : autoThumbnail || ''}
-                      alt="预览"
-                      className="w-16 h-16 object-cover rounded shrink-0"
-                    />
+                    <img src={thumbnailFile ? URL.createObjectURL(thumbnailFile) : autoThumbnail || ''} alt="预览" className="w-16 h-16 object-cover rounded shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 dark:text-white truncate">
-                        {thumbnailFile ? thumbnailFile.name : '视频第一帧(自动)'}
-                      </p>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {thumbnailFile ? `${(thumbnailFile.size / 1024).toFixed(2)} KB` : '自动生成'}
-                      </p>
+                      <p className="font-medium text-gray-900 dark:text-white truncate">{thumbnailFile ? thumbnailFile.name : '视频第一帧(自动)'}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{thumbnailFile ? `${(thumbnailFile.size / 1024).toFixed(2)} KB` : '自动生成'}</p>
                     </div>
                   </div>
-                  <button
-                    onClick={clearThumbnailFile}
-                    className="text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 shrink-0 ml-2"
-                  >
-                    <X size={20} />
-                  </button>
+                  {!uploading && (
+                    <button onClick={clearThumbnailFile} className="text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 shrink-0 ml-2">
+                      <X size={20} />
+                    </button>
+                  )}
                 </div>
               )}
               
               {autoThumbnail && !thumbnailFile && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                  * 已自动使用视频第一帧作为封面，你也可以点击上方按钮自定义封面
-                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">* 已自动使用视频第一帧作为封面</p>
               )}
             </div>
+
+            {/* 上传进度 */}
+            <AnimatePresence>
+              {uploadStatus !== 'idle' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className={`p-4 rounded-lg ${
+                    uploadStatus === 'success' ? 'bg-green-50 dark:bg-green-900/20' :
+                    uploadStatus === 'error' ? 'bg-red-50 dark:bg-red-900/20' :
+                    'bg-blue-50 dark:bg-blue-900/20'
+                  }`}
+                >
+                  {uploadStatus === 'uploading' && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Loader2 className="animate-spin text-blue-600" size={20} />
+                        <span className="text-blue-800 dark:text-blue-300 font-medium">上传中... {uploadProgress}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                        <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">大文件上传可能需要较长时间,请勿关闭页面</p>
+                    </div>
+                  )}
+                  
+                  {uploadStatus === 'success' && (
+                    <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
+                      <CheckCircle2 size={20} />
+                      <span className="font-medium">上传成功!</span>
+                    </div>
+                  )}
+                  
+                  {uploadStatus === 'error' && (
+                    <div>
+                      <div className="flex items-center gap-2 text-red-600 dark:text-red-400 mb-1">
+                        <X size={20} />
+                        <span className="font-medium">上传失败</span>
+                      </div>
+                      <p className="text-sm text-red-500 dark:text-red-400">{errorMessage}</p>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="flex gap-3 pt-2">
               <button
@@ -378,12 +411,13 @@ export default function UploadVideo() {
                 disabled={uploading || !videoTitle || !videoFile}
                 className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:bg-blue-800"
               >
-                <UploadIcon size={20} />
+                {uploading ? <Loader2 className="animate-spin" size={20} /> : <UploadIcon size={20} />}
                 {uploading ? '上传中...' : '确认上传'}
               </button>
               <button
                 onClick={() => navigate('/')}
-                className="px-6 py-3 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-semibold rounded-lg transition-colors active:bg-gray-400 dark:active:bg-gray-500"
+                disabled={uploading}
+                className="px-6 py-3 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-semibold rounded-lg transition-colors disabled:opacity-50"
               >
                 取消
               </button>
