@@ -15,7 +15,8 @@ import {
   AlertTriangle,
   Film,
   Image as ImageIcon,
-  X
+  X,
+  ArrowLeft
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, userService, onlineService, type User as AppUser } from '../services/storage';
@@ -116,6 +117,22 @@ export default function AdminDashboard() {
       } catch (err: any) {
         alert(err.message || '删除失败');
       }
+    }
+  };
+
+  const handleToggleRole = async (u: AppUser) => {
+    const isAdmin = u.role === 'admin';
+    const targetRole: 'admin' | 'user' = isAdmin ? 'user' : 'admin';
+    const msg = isAdmin
+      ? `确定要将 "${u.username}" 降级为普通用户吗?`
+      : `确定要将 "${u.username}" 升级为管理员吗?`;
+    if (!confirm(msg)) return;
+    try {
+      await userService.update(u.id, { role: targetRole });
+      refreshData();
+      alert('角色已更新');
+    } catch (err: any) {
+      alert(err.message || '更新失败');
     }
   };
 
@@ -259,9 +276,18 @@ export default function AdminDashboard() {
       <header className="bg-white dark:bg-gray-800 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-              管理员后台
-            </h1>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => navigate('/')}
+                className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
+              >
+                <ArrowLeft size={20} />
+                <span className="hidden sm:inline">返回首页</span>
+              </button>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                管理员后台
+              </h1>
+            </div>
             <div className="flex items-center gap-4">
               <span className="text-gray-600 dark:text-gray-400">
                 欢迎, {user?.username}
@@ -271,7 +297,7 @@ export default function AdminDashboard() {
                 className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
               >
                 <LogOut size={18} />
-                退出登录
+                <span className="hidden sm:inline">退出登录</span>
               </button>
             </div>
           </div>
@@ -483,15 +509,36 @@ export default function AdminDashboard() {
                         {u.id === 'admin-001' ? '-' : new Date(u.lastSeen).toLocaleString('zh-CN')}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right">
-                        {u.id !== 'admin-001' && (
-                          <button
-                            onClick={() => handleDeleteUser(u.id, u.username)}
-                            className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                            title="删除用户"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        )}
+                        <div className="inline-flex gap-3 items-center justify-end">
+                          {u.role === 'admin' ? (
+                            u.id !== 'admin-001' && (
+                              <button
+                                onClick={() => handleToggleRole(u)}
+                                className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-300"
+                                title="降级为普通用户"
+                              >
+                                <AlertTriangle size={18} />
+                              </button>
+                            )
+                          ) : (
+                            <button
+                              onClick={() => handleToggleRole(u)}
+                              className="text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300"
+                              title="升级为管理员"
+                            >
+                              <UserPlus size={18} />
+                            </button>
+                          )}
+                          {u.id !== 'admin-001' && (
+                            <button
+                              onClick={() => handleDeleteUser(u.id, u.username)}
+                              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                              title="删除用户"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
