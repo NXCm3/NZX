@@ -33,72 +33,88 @@ export default function UploadVideo() {
     return null;
   }
 
-  // 大文件阈值：50MB 以上走流式上传
-  const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024;
+  // 分片上传配置
+  const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB 每片
 
-  // 上传文件到 R2 - 使用 Worker 流式中转（支持任意大小文件）
+  // 分片上传文件到 R2
   const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
     console.log('[上传] 开始上传:', file.name, '大小:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
     
     // 生成唯一文件名
     const ext = file.name.split('.').pop() || '';
-    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
-    const uploadUrl = `${R2_UPLOAD_URL}?filename=${encodeURIComponent(filename)}`;
-    console.log('[上传] 目标URL:', uploadUrl);
-
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.withCredentials = false;
-      
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable && onProgress) {
-          const progress = Math.round((e.loaded / e.total) * 100);
-          console.log('[上传] 进度:', progress + '%', '已上传:', (e.loaded / 1024 / 1024).toFixed(2) + 'MB');
-          onProgress(progress);
-        }
-      });
-      
-      xhr.addEventListener('loadstart', () => {
-        console.log('[上传] 连接已建立，开始传输...');
-      });
-      
-      xhr.addEventListener('load', () => {
-        console.log('[上传] XHR完成, status:', xhr.status, 'readyState:', xhr.readyState);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const response = JSON.parse(xhr.responseText);
-            console.log('[上传] 响应:', response);
-            resolve(response.url);
-          } catch (e) {
-            console.error('[上传] 解析响应失败:', e);
-            reject(new Error('解析响应失败'));
-          }
-        } else {
-          console.error('[上传] HTTP错误:', xhr.status, xhr.statusText, xhr.responseText);
-          reject(new Error(`上传失败 (HTTP ${xhr.status}): ${xhr.statusText}`));
-        }
-      });
-      
-      xhr.addEventListener('error', (e) => {
-        console.error('[上传] XHR error事件:', e, 'status:', xhr.status);
-        reject(new Error('网络错误'));
-      });
-      
-      xhr.addEventListener('timeout', () => {
-        console.error('[上传] XHR超时');
-        reject(new Error('上传超时'));
-      });
-      
-      xhr.addEventListener('abort', () => {
-        console.error('[上传] XHR被取消');
-        reject(new Error('上传被取消'));
-      });
-      
-      xhr.open('POST', uploadUrl, true);
-      xhr.timeout = 30 * 60 * 1000; // 30分钟超时
-      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      xhr.send(file);
+    const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const filename = `${fileId}.${ext}`;
+    
+    // 计算分片数
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    console.log('[上传] 分片数:', totalChunks, '每片:', (CHUNK_SIZE / 1024 / 1024).toFixed(0) + 'MB');
+    
+    // 创建上传会话
+    console.log('[上传] 创建上传会话...');
+    const sessionRes = await fetch('/api/upload/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, fileSize: file.size, totalChunks }),
     });
+    
+    if (!sessionRes.ok) {
+      const err = await sessionRes.json().catch(() => ({}));
+      throw new Error(`创建上传会话失败: ${err.error || '未知错误'}`);
+    }
+    
+    const { uploadId } = await sessionRes.json();
+    console.log('[上传] 上传会话创建成功, uploadId:', uploadId);
+    
+    // 上传所有分片
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      
+      console.log(`[上传] 上传分片 ${chunkIndex + 1}/${totalChunks}, 大小: ${(chunk.size / 1024 / 1024).toFixed(2)}MB`);
+      
+      const formData = new FormData();
+      formData.append('file', chunk, `chunk-${chunkIndex}`);
+      formData.append('uploadId', uploadId);
+      formData.append('chunkIndex', String(chunkIndex));
+      formData.append('totalChunks', String(totalChunks));
+      
+      const chunkRes = await fetch('/api/upload/chunk', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!chunkRes.ok) {
+        const err = await chunkRes.json().catch(() => ({}));
+        throw new Error(`上传分片 ${chunkIndex + 1} 失败: ${err.error || '未知错误'}`);
+      }
+      
+      // 更新进度
+      if (onProgress) {
+        const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+        onProgress(progress);
+      }
+      
+      console.log(`[上传] 分片 ${chunkIndex + 1}/${totalChunks} 上传成功`);
+    }
+    
+    // 合并分片
+    console.log('[上传] 合并分片...');
+    const mergeRes = await fetch('/api/upload/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId, filename, totalChunks }),
+    });
+    
+    if (!mergeRes.ok) {
+      const err = await mergeRes.json().catch(() => ({}));
+      throw new Error(`合并分片失败: ${err.error || '未知错误'}`);
+    }
+    
+    const { url } = await mergeRes.json();
+    console.log('[上传] 上传完成, 文件URL:', url);
+    
+    return url;
   };
 
   const handleUpload = async () => {

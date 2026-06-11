@@ -108,6 +108,108 @@ async function generateR2PresignedUrl(
   return { uploadUrl, fileUrl };
 }
 
+// ---------- 分片上传 API ----------
+
+// 创建上传会话
+const handleUploadInit = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { filename, fileSize, totalChunks } = body;
+  
+  if (!filename) {
+    return new Response(JSON.stringify({ error: 'filename required' }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 16)}`;
+  
+  console.log('[分片上传] 创建会话:', uploadId, '文件名:', filename, '分片数:', totalChunks);
+  
+  return new Response(JSON.stringify({ uploadId }), { headers: jsonHeaders(origin) });
+};
+
+// 上传分片
+const handleUploadChunk = async (request: Request, env: Env, origin: string) => {
+  const formData = await request.formData();
+  const file = formData.get('file') as File;
+  const uploadId = formData.get('uploadId') as string;
+  const chunkIndex = parseInt(formData.get('chunkIndex') as string);
+  const totalChunks = parseInt(formData.get('totalChunks') as string);
+  
+  if (!file || !uploadId || isNaN(chunkIndex)) {
+    return new Response(JSON.stringify({ error: 'Missing parameters' }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  
+  // 保存分片到临时位置
+  const tempKey = `temp/${uploadId}/chunk-${chunkIndex}`;
+  await env.R2_BUCKET.put(tempKey, file.stream(), { httpMetadata: { contentType: file.type } });
+  
+  console.log(`[分片上传] 分片 ${chunkIndex + 1}/${totalChunks} 上传成功, uploadId: ${uploadId}`);
+  
+  return new Response(JSON.stringify({ success: true, chunkIndex }), { headers: jsonHeaders(origin) });
+};
+
+// 合并分片
+const handleUploadComplete = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { uploadId, filename, totalChunks } = body;
+  
+  if (!uploadId || !filename) {
+    return new Response(JSON.stringify({ error: 'Missing parameters' }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  
+  console.log('[分片上传] 合并分片:', uploadId, '文件名:', filename, '分片数:', totalChunks);
+  
+  try {
+    // 获取所有分片
+    const chunks: ReadableStream<Uint8Array>[] = [];
+    
+    for (let i = 0; i < totalChunks; i++) {
+      const tempKey = `temp/${uploadId}/chunk-${i}`;
+      const obj = await env.R2_BUCKET.get(tempKey);
+      
+      if (!obj) {
+        return new Response(JSON.stringify({ error: `分片 ${i} 缺失` }), { status: 400, headers: jsonHeaders(origin) });
+      }
+      
+      chunks.push(obj.body as ReadableStream<Uint8Array>);
+    }
+    
+    // 合并所有分片
+    const concatenatedStream = new ReadableStream({
+      async pull(controller) {
+        for (const chunkStream of chunks) {
+          const reader = chunkStream.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+        }
+        controller.close();
+      }
+    });
+    
+    // 上传合并后的文件
+    const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+    const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
+    
+    await env.R2_BUCKET.put(filename, concatenatedStream, { httpMetadata: { contentType: 'application/octet-stream' } });
+    
+    // 删除临时分片
+    for (let i = 0; i < totalChunks; i++) {
+      const tempKey = `temp/${uploadId}/chunk-${i}`;
+      await env.R2_BUCKET.delete(tempKey);
+    }
+    
+    console.log('[分片上传] 合并完成:', fileUrl);
+    
+    return new Response(JSON.stringify({ success: true, url: fileUrl }), { headers: jsonHeaders(origin) });
+    
+  } catch (error: any) {
+    console.error('[分片上传] 合并失败:', error.message);
+    return new Response(JSON.stringify({ error: '合并失败', message: error.message }), { status: 500, headers: jsonHeaders(origin) });
+  }
+};
+
 // ---------- 大文件上传（流式，支持任意大小文件） ----------
 const handleUpload = async (request: Request, env: Env, origin: string) => {
   console.log('[上传] 收到上传请求');
@@ -393,6 +495,12 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
       const { uploadUrl, fileUrl } = await generateR2PresignedUrl(body.filename, body.contentType || 'application/octet-stream', env);
       return new Response(JSON.stringify({ uploadUrl, fileUrl, filename: body.filename }), { headers: jsonHeaders(origin) });
     }
+    // 分片上传 - 创建会话
+    if (path === '/upload/init' && method === 'POST') return handleUploadInit(request, env, origin);
+    // 分片上传 - 上传分片
+    if (path === '/upload/chunk' && method === 'POST') return handleUploadChunk(request, env, origin);
+    // 分片上传 - 合并分片
+    if (path === '/upload/complete' && method === 'POST') return handleUploadComplete(request, env, origin);
 
     // 视频
     if (path === '/videos' && method === 'GET') return handleVideosList(request, env, origin);
