@@ -33,38 +33,65 @@ export default function UploadVideo() {
     return null;
   }
 
+  // 大文件阈值：50MB 以上走预签名直传 R2（绕过 Worker 100MB 限制）
+  const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024;
+
   // 上传文件到 R2
+  // 小文件(<50MB): POST /api/upload (Worker 中转)
+  // 大文件(>=50MB): 先获取预签名 URL，再直接 PUT 到 R2
   const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
+    // 优先使用预签名直传（所有文件大小都支持）
+    if (file.size >= LARGE_FILE_THRESHOLD || file.size > 5 * 1024 * 1024) {
+      // 获取预签名上传 URL
+      const presignRes = await fetch('/api/upload/presign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+        }),
+      });
+      if (!presignRes.ok) {
+        const err = await presignRes.json().catch(() => ({}));
+        throw new Error(err.error || '获取上传链接失败');
+      }
+      const { uploadUrl, fileUrl } = await presignRes.json();
+
+      // 直接 PUT 到 R2（显示真实上传进度）
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+        });
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(fileUrl);
+          else reject(new Error(`R2 上传失败: ${xhr.status} ${xhr.responseText}`));
+        });
+        xhr.addEventListener('error', () => reject(new Error('网络错误')));
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.send(file);
+      });
+    }
+
+    // 小文件走 Worker 中转
     const formData = new FormData();
     formData.append('file', file);
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      
-      xhr.upload.addEventListener('progress', (event) => {
-        if (event.lengthComputable && onProgress) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          onProgress(progress);
-        }
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
       });
-
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const response = JSON.parse(xhr.responseText);
             resolve(response.url);
-          } catch (e) {
-            reject(new Error('解析响应失败'));
-          }
-        } else {
-          reject(new Error(`上传失败: ${xhr.status}`));
-        }
+          } catch { reject(new Error('解析响应失败')); }
+        } else { reject(new Error(`上传失败: ${xhr.status}`)); }
       });
-
-      xhr.addEventListener('error', () => {
-        reject(new Error('网络错误'));
-      });
-
+      xhr.addEventListener('error', () => reject(new Error('网络错误')));
       xhr.open('POST', R2_UPLOAD_URL);
       xhr.send(formData);
     });

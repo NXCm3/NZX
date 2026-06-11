@@ -5,6 +5,9 @@ export interface Env {
   R2_BUCKET: R2Bucket;
   DB: D1Database;
   R2_PUBLIC_URL?: string;
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
   ALLOWED_ORIGINS?: string;
 }
 
@@ -38,7 +41,74 @@ const parseBody = async (req: Request) => {
   return {};
 };
 
-// ---------- R2 文件上传 ----------
+// ---------- R2 预签名 URL（AWS S3 Signature V4） ----------
+// 大文件直接从浏览器 PUT 到 R2，绕过 Worker 100MB 限制
+async function hmacSha256(key: Uint8Array, data: string): Promise<ArrayBuffer> {
+  return await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    .then(k => crypto.subtle.sign('HMAC', k, new TextEncoder().encode(data)));
+}
+
+function sha256hex(data: string): string {
+  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(data))
+    .then(buf => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''));
+}
+
+function hmacSha256hex(key: Uint8Array, data: string): Promise<string> {
+  return hmacSha256(key, data).then(buf =>
+    Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+  );
+}
+
+async function generateR2PresignedUrl(
+  filename: string,
+  contentType: string,
+  env: Env
+): Promise<{ uploadUrl: string; fileUrl: string }> {
+  const accountId = env.R2_ACCOUNT_ID || '';
+  const accessKeyId = env.R2_ACCESS_KEY_ID || '';
+  const secretKey = env.R2_SECRET_ACCESS_KEY || '';
+  const bucketName = 'my-r2-nxc'; // R2 bucket 名称
+  const expiresIn = 3600; // 1小时有效期
+
+  const host = `${bucketName}.${accountId}.r2.dev`;
+  const region = 'auto';
+  const service = 's3';
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+
+  // 生成 unique object key
+  const objectKey = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${filename}`;
+
+  const canonicalUri = `/${objectKey}`;
+  const canonicalQuerystring = `X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=${encodeURIComponent(accessKeyId + '/' + dateStamp + '/' + region + '/' + service + '/aws4_request')}&X-Amz-Date=${amzDate}&X-Amz-Expires=${expiresIn}&X-Amz-SignedHeaders=host`;
+
+  const canonicalHeaders = `host:${host}\n`;
+  const signedHeaders = 'host';
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+
+  const canonicalRequest = [
+    'PUT', canonicalUri, canonicalQuerystring,
+    canonicalHeaders, signedHeaders, payloadHash
+  ].join('\n');
+
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, await sha256hex(canonicalRequest)].join('\n');
+
+  const kDate = await hmacSha256hex(new TextEncoder().encode('AWS4' + secretKey), dateStamp);
+  const kRegion = await hmacSha256hex(new Uint8Array(kDate.match(/.{2}/g)!.map(b => parseInt(b, 16))), region);
+  const kService = await hmacSha256hex(new Uint8Array(kRegion.match(/.{2}/g)!.map(b => parseInt(b, 16))), service);
+  const kSigning = await hmacSha256hex(new Uint8Array(kService.match(/.{2}/g)!.map(b => parseInt(b, 16))), 'aws4_request');
+  const signature = await hmacSha256hex(new Uint8Array(kSigning.match(/.{2}/g)!.map(b => parseInt(b, 16))), stringToSign);
+
+  const uploadUrl = `https://${host}${canonicalUri}?${canonicalQuerystring}&X-Amz-Signature=${signature}`;
+  const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+  const fileUrl = `${baseUrl.replace(/\/$/, '')}/${objectKey}`;
+
+  return { uploadUrl, fileUrl };
+}
+
+// ---------- 小文件上传（直接中转，<50MB 推荐） ----------
 const handleUpload = async (request: Request, env: Env, origin: string) => {
   const formData = await request.formData();
   const file = formData.get('file') as File;
@@ -228,6 +298,13 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
   try {
     // 文件上传
     if (path === '/upload' && method === 'POST') return handleUpload(request, env, origin);
+    // 预签名 URL（用于大文件直接上传到 R2）
+    if (path === '/upload/presign' && method === 'POST') {
+      const body = await parseBody(request);
+      if (!body.filename) return new Response(JSON.stringify({ error: 'filename required' }), { status: 400, headers: jsonHeaders(origin) });
+      const { uploadUrl, fileUrl } = await generateR2PresignedUrl(body.filename, body.contentType || 'application/octet-stream', env);
+      return new Response(JSON.stringify({ uploadUrl, fileUrl, filename: body.filename }), { headers: jsonHeaders(origin) });
+    }
 
     // 视频
     if (path === '/videos' && method === 'GET') return handleVideosList(request, env, origin);
