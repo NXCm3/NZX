@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, MessageCircle, Send, Trash2, Reply, Settings, ChevronDown } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Send, Trash2, Reply, MoreHorizontal, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, onlineService } from '../services/storage';
 import type { Video, Comment } from '../services/storage';
@@ -33,28 +33,28 @@ export default function VideoPlayer() {
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [selectedResolution, setSelectedResolution] = useState<Resolution>('original');
-  const [showResolutionMenu, setShowResolutionMenu] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
 
   useEffect(() => {
-    // 点击外部关闭分辨率菜单
+    // 点击外部关闭更多选项菜单
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      const resolutionMenu = document.querySelector('.resolution-menu-container');
-      if (resolutionMenu && !resolutionMenu.contains(target)) {
-        setShowResolutionMenu(false);
+      const moreMenu = document.querySelector('.more-menu-container');
+      if (moreMenu && !moreMenu.contains(target)) {
+        setShowMoreMenu(false);
       }
     };
 
-    if (showResolutionMenu) {
+    if (showMoreMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showResolutionMenu]);
+  }, [showMoreMenu]);
 
   useEffect(() => {
     if (id) {
@@ -215,34 +215,35 @@ export default function VideoPlayer() {
                 您的浏览器不支持视频播放
               </video>
               
-              {/* 分辨率选择器 */}
-              <div className="absolute bottom-4 right-4 resolution-menu-container">
+              {/* 更多选项菜单 */}
+              <div className="absolute bottom-4 right-4 more-menu-container">
                 <div className="relative">
                   <button
-                    onClick={() => setShowResolutionMenu(!showResolutionMenu)}
-                    className="bg-black/70 hover:bg-black/90 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
+                    onClick={() => setShowMoreMenu(!showMoreMenu)}
+                    className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
                   >
-                    <Settings size={14} />
-                    {resolutionOptions.find(r => r.value === selectedResolution)?.label}
-                    <ChevronDown size={14} className={`transition-transform ${showResolutionMenu ? 'rotate-180' : ''}`} />
+                    <MoreHorizontal size={20} />
                   </button>
                   
-                  {showResolutionMenu && (
-                    <div className="absolute right-0 mt-2 bg-gray-900 rounded-lg shadow-lg py-1 min-w-[100px] z-10">
+                  {showMoreMenu && (
+                    <div className="absolute right-0 mt-2 bg-gray-900 rounded-lg shadow-lg py-2 min-w-[150px] z-10">
+                      <div className="px-3 py-2 text-xs text-gray-400 uppercase tracking-wider mb-1">
+                        画质
+                      </div>
                       {resolutionOptions.map((option) => (
                         <button
                           key={option.value}
                           onClick={() => {
                             setSelectedResolution(option.value);
-                            setShowResolutionMenu(false);
+                            setShowMoreMenu(false);
                           }}
-                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center gap-2 ${
+                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center justify-between ${
                             selectedResolution === option.value ? 'bg-gray-700' : ''
                           }`}
                         >
                           {option.label}
                           {selectedResolution === option.value && (
-                            <span className="ml-auto text-blue-400">✓</span>
+                            <span className="text-blue-400">✓</span>
                           )}
                         </button>
                       ))}
