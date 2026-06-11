@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, MessageCircle, Send, Trash2, Reply } from 'lucide-react';
+import { MessageCircle, Send, Trash2, Reply } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, onlineService } from '../services/storage';
 import type { Video, Comment } from '../services/storage';
+import Header from '../components/Layout/Header';
 
 type Resolution = 'original' | '360p';
 
@@ -179,23 +180,7 @@ export default function VideoPlayer() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
-      <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex justify-between items-center h-16">
-            <button
-              onClick={() => navigate('/')}
-              className="flex items-center gap-2 px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm"
-            >
-              <ArrowLeft size={16} />
-              <span>返回首页</span>
-            </button>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-              视频播放
-            </h1>
-            <div className="w-20"></div>
-          </div>
-        </div>
-      </header>
+      <Header title="视频播放" showBack />
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

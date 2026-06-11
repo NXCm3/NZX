@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { LogIn, LogOut, Video as VideoIcon, Eye, Upload, Trash2, Settings, X, Save, CheckSquare, Square, Trash } from 'lucide-react';
+import { Video as VideoIcon, X, Save, CheckSquare, Square, Trash } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, onlineService, userService } from '../services/storage';
 import type { Video } from '../services/storage';
+import Header from '../components/Layout/Header';
+import VideoCard from '../components/VideoCard';
+import UserCard from '../components/UserCard';
 
 export default function UserHome() {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -205,119 +207,13 @@ export default function UserHome() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
-      <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex justify-between items-center h-16 gap-2">
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2 whitespace-nowrap min-w-0 shrink-0">
-              <VideoIcon className="text-blue-600 shrink-0" size={20} />
-              <span>视频分享平台</span>
-            </h1>
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {user ? (
-                <>
-                  {/* 账户设置 */}
-                  <button
-                    onClick={() => setShowSettings(true)}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors text-sm"
-                  >
-                    <Settings size={16} />
-                    <span>账户</span>
-                  </button>
-                  {user.role === 'admin' && (
-                    <button
-                      onClick={() => navigate('/admin')}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors text-sm"
-                    >
-                      <Settings size={16} />
-                      <span>管理</span>
-                    </button>
-                  )}
-                  {canUploadVideo && (
-                    <button
-                      onClick={() => navigate('/upload')}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
-                    >
-                      <Upload size={16} />
-                      <span>上传</span>
-                    </button>
-                  )}
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
-                  >
-                    <LogOut size={16} />
-                    <span>退出</span>
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => navigate('/login')}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-                >
-                  <LogIn size={18} />
-                  <span>登录</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header />
 
       {/* 主要内容 */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         {/* 用户功能卡片 */}
         {user && (
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-200 dark:border-gray-700 p-4 mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-xl">
-                  {user.username.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="font-bold text-gray-900 dark:text-white text-lg">
-                    {user.username}
-                  </div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {user.role === 'admin' ? '👑 管理员' : '👤 普通用户'}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              <button
-                onClick={() => setShowSettings(true)}
-                className="flex flex-col items-center justify-center py-3 px-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
-              >
-                <Settings size={20} className="mb-1" />
-                <span className="text-xs font-medium">设置</span>
-              </button>
-              {user.role === 'admin' && (
-                <button
-                  onClick={() => navigate('/admin')}
-                  className="flex flex-col items-center justify-center py-3 px-2 bg-purple-100 dark:bg-purple-900 hover:bg-purple-200 dark:hover:bg-purple-800 text-purple-700 dark:text-purple-200 rounded-lg transition-colors"
-                >
-                  <Settings size={20} className="mb-1" />
-                  <span className="text-xs font-medium">管理</span>
-                </button>
-              )}
-              {canUploadVideo && (
-                <button
-                  onClick={() => navigate('/upload')}
-                  className="flex flex-col items-center justify-center py-3 px-2 bg-green-100 dark:bg-green-900 hover:bg-green-200 dark:hover:bg-green-800 text-green-700 dark:text-green-200 rounded-lg transition-colors"
-                >
-                  <Upload size={20} className="mb-1" />
-                  <span className="text-xs font-medium">上传</span>
-                </button>
-              )}
-              <button
-                onClick={handleLogout}
-                className="flex flex-col items-center justify-center py-3 px-2 bg-red-100 dark:bg-red-900 hover:bg-red-200 dark:hover:bg-red-800 text-red-700 dark:text-red-200 rounded-lg transition-colors"
-              >
-                <LogOut size={20} className="mb-1" />
-                <span className="text-xs font-medium">退出</span>
-              </button>
-            </div>
-          </div>
+          <UserCard onSettings={() => setShowSettings(true)} />
         )}
 
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
@@ -354,53 +250,17 @@ export default function UserHome() {
 
         {videos.length > 0 ? (
           <div className="grid grid-cols-3 gap-2">
-            {videos.map((video, index) => (
-              <motion.div
+            {videos.map((video) => (
+              <VideoCard
                 key={video.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
+                video={video}
+                manageable={manageableIds.has(video.id)}
+                selected={selectedVideoIds.has(video.id)}
+                showCheckbox={manageableIds.has(video.id)}
                 onClick={() => handleVideoClick(video.id)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden cursor-pointer hover:shadow-lg transition-shadow duration-200 group relative"
-              >
-                <div className="relative" style={{ aspectRatio: '4/3' }}>
-                  <img
-                    src={video.thumbnail}
-                    alt={video.title}
-                    className="w-full h-full object-contain bg-black"
-                  />
-                  {manageableIds.has(video.id) && (
-                    <button
-                      onClick={(e) => handleToggleSelect(video.id, e)}
-                      className={`absolute top-1 left-1 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
-                        selectedVideoIds.has(video.id)
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-white/80 text-gray-600 opacity-0 group-hover:opacity-100'
-                      }`}
-                      title={selectedVideoIds.has(video.id) ? '取消选中' : '选中'}
-                    >
-                      {selectedVideoIds.has(video.id) ? <CheckSquare size={14} /> : <Square size={14} />}
-                    </button>
-                  )}
-                  {canDeleteVideo(video) && (
-                    <button
-                      onClick={(e) => handleDeleteVideo(video.id, e)}
-                      className="absolute top-1 right-1 w-6 h-6 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="删除视频"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                  <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded">
-                    {video.views}
-                  </div>
-                </div>
-                <div className="p-2">
-                  <h3 className="font-semibold text-gray-900 dark:text-white line-clamp-1 group-hover:text-blue-600 transition-colors text-xs">
-                    {video.title}
-                  </h3>
-                </div>
-              </motion.div>
+                onDelete={(e) => handleDeleteVideo(video.id, e)}
+                onSelect={(e) => handleToggleSelect(video.id, e)}
+              />
             ))}
           </div>
         ) : (

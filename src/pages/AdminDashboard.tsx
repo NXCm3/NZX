@@ -4,8 +4,6 @@ import { motion } from 'framer-motion';
 import {
   Users,
   Video,
-  LogOut,
-  Plus,
   Trash2,
   Eye,
   Upload,
@@ -16,10 +14,10 @@ import {
   Film,
   Image as ImageIcon,
   X,
-  ArrowLeft
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, userService, onlineService, type User as AppUser } from '../services/storage';
+import Header from '../components/Layout/Header';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<'users' | 'videos' | 'stats'>('stats');
@@ -273,31 +271,7 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
-      <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex justify-between items-center h-16 gap-2">
-            <button
-              onClick={() => navigate('/')}
-              className="flex items-center gap-1.5 px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm shrink-0"
-            >
-              <ArrowLeft size={16} />
-              <span>返回首页</span>
-            </button>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-              管理员后台
-            </h1>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
-              >
-                <LogOut size={16} />
-                <span>退出</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header title="管理员后台" showBack />
 
       {/* 标签页导航 */}
       <div className="max-w-7xl mx-auto px-4 mt-6">
