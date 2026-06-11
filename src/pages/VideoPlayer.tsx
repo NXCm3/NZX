@@ -210,39 +210,42 @@ export default function VideoPlayer() {
               </video>
             </div>
             
-            {/* 视频下方的画质选择器 - 点击后向上弹出 */}
+            {/* 视频下方的画质选择器 - 点击原画向上弹出360P选项 */}
             <div className="mt-3">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <button
-                    onClick={() => setShowMoreMenu(!showMoreMenu)}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    <span>画质</span>
-                    <span className="text-blue-600 dark:text-blue-400 font-semibold">
-                      {resolutionOptions.find(r => r.value === selectedResolution)?.label}
-                    </span>
-                  </button>
-                  
-                  {showMoreMenu && (
-                    <div className="absolute bottom-full left-0 mb-2 bg-gray-900 dark:bg-gray-800 rounded-lg shadow-lg py-2 min-w-[120px] z-10">
-                      {resolutionOptions.map((option) => (
-                        <button
-                          key={option.value}
-                          onClick={() => {
-                            setSelectedResolution(option.value);
-                            setShowMoreMenu(false);
-                          }}
-                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-700 transition-colors ${
-                            selectedResolution === option.value ? 'bg-blue-600 hover:bg-blue-700' : ''
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
+              <div className="relative inline-block">
+                <button
+                  onClick={() => setShowMoreMenu(!showMoreMenu)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {selectedResolution === 'original' ? '原画' : '360P'}
+                </button>
+                
+                {showMoreMenu && (
+                  <div className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg py-2 min-w-[100px] z-10 border border-gray-200 dark:border-gray-700">
+                    <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                      选择画质
                     </div>
-                  )}
-                </div>
+                    {resolutionOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => {
+                          setSelectedResolution(option.value);
+                          setShowMoreMenu(false);
+                        }}
+                        className={`w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center justify-between ${
+                          selectedResolution === option.value 
+                            ? 'text-blue-600 dark:text-blue-400 font-medium' 
+                            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        <span>{option.label}</span>
+                        {selectedResolution === option.value && (
+                          <span className="text-blue-600 dark:text-blue-400">✓</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
