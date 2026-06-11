@@ -273,31 +273,26 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
-      <header className="bg-white dark:bg-gray-800 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => navigate('/')}
-                className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
-              >
-                <ArrowLeft size={20} />
-                <span className="hidden sm:inline">返回首页</span>
-              </button>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-                管理员后台
-              </h1>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-gray-600 dark:text-gray-400">
-                欢迎, {user?.username}
-              </span>
+      <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex justify-between items-center h-16 gap-2">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-1.5 px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm shrink-0"
+            >
+              <ArrowLeft size={16} />
+              <span>返回首页</span>
+            </button>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+              管理员后台
+            </h1>
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
               >
-                <LogOut size={18} />
-                <span className="hidden sm:inline">退出登录</span>
+                <LogOut size={16} />
+                <span>退出</span>
               </button>
             </div>
           </div>
@@ -305,7 +300,7 @@ export default function AdminDashboard() {
       </header>
 
       {/* 标签页导航 */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+      <div className="max-w-7xl mx-auto px-4 mt-6">
         <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700">
           <button
             onClick={() => setActiveTab('stats')}
@@ -341,7 +336,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* 内容区域 */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'stats' && (
           <motion.div
             initial={{ opacity: 0 }}

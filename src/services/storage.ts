@@ -165,6 +165,13 @@ export const userService = {
     await http(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
+  update: async (id: string, update: { username?: string; password?: string; role?: 'admin' | 'user' }): Promise<User> => {
+    return await http(`/users/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    });
+  },
+
   updateOnlineStatus: async (id: string, isOnline: boolean): Promise<void> => {
     if (isOnline) {
       await http(`/users/${encodeURIComponent(id)}/activity`, { method: 'POST' });

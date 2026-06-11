@@ -180,20 +180,24 @@ export default function VideoPlayer() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* 顶部导航 */}
       <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center h-16">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex justify-between items-center h-16">
             <button
               onClick={() => navigate('/')}
-              className="flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm"
             >
-              <ArrowLeft size={20} />
-              返回首页
+              <ArrowLeft size={16} />
+              <span>返回首页</span>
             </button>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+              视频播放
+            </h1>
+            <div className="w-20"></div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* 视频播放器 */}
           <div className="lg:col-span-2">
