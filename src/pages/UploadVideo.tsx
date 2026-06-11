@@ -38,7 +38,7 @@ export default function UploadVideo() {
 
   // 上传文件到 R2
   // 小文件(<50MB): POST /api/upload (Worker 中转)
-  // 大文件(>=50MB): 先获取预签名 URL，再直接 PUT 到 R2
+  // 大文件(>=50MB): 先尝试预签名直传，失败则降级到 Worker 中转
   const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
     // 大文件优先尝试预签名直传
     const usePresign = file.size >= LARGE_FILE_THRESHOLD || file.size > 5 * 1024 * 1024;
@@ -62,36 +62,41 @@ export default function UploadVideo() {
         }
         
         const { uploadUrl, fileUrl } = await presignRes.json();
-        console.log('[上传] 预签名URL获取成功, 开始上传...');
+        console.log('[上传] 预签名URL获取成功, uploadUrl:', uploadUrl);
 
-        // 直接 PUT 到 R2
-        return new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+        // 尝试预签名上传
+        try {
+          return await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.upload.addEventListener('progress', (e) => {
+              if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+            });
+            xhr.addEventListener('load', () => {
+              console.log('[上传] XHR完成, status:', xhr.status);
+              if (xhr.status >= 200 && xhr.status < 300) resolve(fileUrl);
+              else reject(new Error(`R2上传失败 (HTTP ${xhr.status})`));
+            });
+            xhr.addEventListener('error', () => {
+              console.error('[上传] XHR error');
+              reject(new Error('预签名上传失败'));
+            });
+            xhr.addEventListener('abort', () => reject(new Error('上传被取消')));
+            xhr.open('PUT', uploadUrl);
+            xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+            xhr.send(file);
           });
-          xhr.addEventListener('load', () => {
-            console.log('[上传] XHR完成, status:', xhr.status);
-            if (xhr.status >= 200 && xhr.status < 300) resolve(fileUrl);
-            else reject(new Error(`R2上传失败 (HTTP ${xhr.status}): ${xhr.responseText || '请检查R2 CORS配置'}`));
-          });
-          xhr.addEventListener('error', () => {
-            console.error('[上传] XHR error, response:', xhr.responseText);
-            reject(new Error(`网络错误 (HTTP ${xhr.status})`));
-          });
-          xhr.addEventListener('abort', () => reject(new Error('上传被取消')));
-          xhr.open('PUT', uploadUrl);
-          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-          xhr.send(file);
-        });
+        } catch (presignErr: any) {
+          console.log('[上传] 预签名直传失败，尝试降级到 Worker 中转:', presignErr.message);
+          // 降级到 Worker 中转
+        }
       } catch (err: any) {
         console.error('[上传] 预签名上传失败:', err.message);
-        // 返回错误，提示用户配置 R2 CORS
-        throw new Error(`大文件上传失败: ${err.message}。如果问题持续，请联系管理员检查R2存储配置。`);
+        console.log('[上传] 降级到 Worker 中转模式');
       }
     }
 
-    // 小文件走 Worker 中转
+    // Worker 中转模式
+    console.log('[上传] 使用 Worker 中转方式上传');
     const formData = new FormData();
     formData.append('file', file);
 
