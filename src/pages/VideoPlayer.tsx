@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, MessageCircle, Send, Trash2, Reply, MoreHorizontal, X, Download, PictureInPicture, Check } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Send, Trash2, Reply } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, onlineService } from '../services/storage';
 import type { Video, Comment } from '../services/storage';
@@ -47,39 +47,6 @@ export default function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
-
-  const togglePictureInPicture = async () => {
-    if (videoRef.current) {
-      try {
-        if (document.pictureInPictureElement) {
-          await document.exitPictureInPicture();
-        } else {
-          await videoRef.current.requestPictureInPicture();
-        }
-      } catch (error) {
-        console.error('画中画切换失败:', error);
-      }
-    }
-  };
-
-  useEffect(() => {
-    // 点击外部关闭更多选项菜单
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      const moreMenu = document.querySelector('.more-menu-container');
-      if (moreMenu && !moreMenu.contains(target)) {
-        setShowMoreMenu(false);
-      }
-    };
-
-    if (showMoreMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showMoreMenu]);
 
   useEffect(() => {
     if (id) {
@@ -241,34 +208,24 @@ export default function VideoPlayer() {
               >
                 您的浏览器不支持视频播放
               </video>
-              
-              {/* 更多选项菜单 */}
-              <div className="absolute bottom-4 right-4 more-menu-container">
+            </div>
+            
+            {/* 视频下方的画质选择器 - 点击后向上弹出 */}
+            <div className="mt-3">
+              <div className="flex items-center gap-3">
                 <div className="relative">
                   <button
                     onClick={() => setShowMoreMenu(!showMoreMenu)}
-                    className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium transition-colors"
                   >
-                    <MoreHorizontal size={20} />
+                    <span>画质</span>
+                    <span className="text-blue-600 dark:text-blue-400 font-semibold">
+                      {resolutionOptions.find(r => r.value === selectedResolution)?.label}
+                    </span>
                   </button>
                   
                   {showMoreMenu && (
-                    <div className="absolute right-0 mt-2 bg-gray-900 rounded-lg shadow-lg py-2 min-w-[180px] z-10">
-                      {/* 下载选项 */}
-                      <a
-                        href={video.videoUrl}
-                        download
-                        className="flex items-center gap-3 w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors"
-                      >
-                        <Download size={16} />
-                        <span>下载</span>
-                      </a>
-                      
-                      {/* 画质选项 */}
-                      <div className="border-t border-gray-700 my-2" />
-                      <div className="px-3 py-2 text-xs text-gray-400 uppercase tracking-wider">
-                        画质
-                      </div>
+                    <div className="absolute bottom-full left-0 mb-2 bg-gray-900 dark:bg-gray-800 rounded-lg shadow-lg py-2 min-w-[120px] z-10">
                       {resolutionOptions.map((option) => (
                         <button
                           key={option.value}
@@ -276,52 +233,13 @@ export default function VideoPlayer() {
                             setSelectedResolution(option.value);
                             setShowMoreMenu(false);
                           }}
-                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center justify-between ${
-                            selectedResolution === option.value ? 'bg-gray-700' : ''
+                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-700 transition-colors ${
+                            selectedResolution === option.value ? 'bg-blue-600 hover:bg-blue-700' : ''
                           }`}
                         >
-                          <span>{option.label}</span>
-                          {selectedResolution === option.value && (
-                            <Check size={14} className="text-blue-400" />
-                          )}
+                          {option.label}
                         </button>
                       ))}
-                      
-                      {/* 播放速度选项 */}
-                      <div className="border-t border-gray-700 my-2" />
-                      <div className="px-3 py-2 text-xs text-gray-400 uppercase tracking-wider">
-                        播放速度
-                      </div>
-                      {playbackSpeeds.map((speed) => (
-                        <button
-                          key={speed.value}
-                          onClick={() => {
-                            setPlaybackSpeed(speed.value);
-                            setShowMoreMenu(false);
-                          }}
-                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center justify-between ${
-                            playbackSpeed === speed.value ? 'bg-gray-700' : ''
-                          }`}
-                        >
-                          <span>{speed.label}</span>
-                          {playbackSpeed === speed.value && (
-                            <Check size={14} className="text-blue-400" />
-                          )}
-                        </button>
-                      ))}
-                      
-                      {/* 画中画选项 */}
-                      <div className="border-t border-gray-700 my-2" />
-                      <button
-                        onClick={() => {
-                          togglePictureInPicture();
-                          setShowMoreMenu(false);
-                        }}
-                        className="flex items-center gap-3 w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors"
-                      >
-                        <PictureInPicture size={16} />
-                        <span>画中画</span>
-                      </button>
                     </div>
                   )}
                 </div>
