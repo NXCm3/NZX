@@ -1,10 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, MessageCircle, Send, Trash2, Reply } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Send, Trash2, Reply, Settings, ChevronDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { videoService, commentService, onlineService } from '../services/storage';
 import type { Video, Comment } from '../services/storage';
+
+type Resolution = 'original' | '360p';
+
+const resolutionOptions: { value: Resolution; label: string }[] = [
+  { value: 'original', label: '原视频' },
+  { value: '360p', label: '360P' },
+];
+
+// 根据分辨率获取视频 URL
+const getTranscodedUrl = (originalUrl: string, resolution: string): string => {
+  if (resolution === 'original') return originalUrl;
+  
+  // 生成转码版本的 URL（格式：原文件名_360p.扩展名）
+  const urlParts = originalUrl.split('.');
+  const extension = urlParts.pop();
+  const baseUrl = urlParts.join('.');
+  
+  // 如果转码版本不存在，回退到原视频
+  return `${baseUrl}_${resolution}.${extension}`;
+};
 
 export default function VideoPlayer() {
   const { id } = useParams<{ id: string }>();
@@ -12,8 +32,29 @@ export default function VideoPlayer() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [selectedResolution, setSelectedResolution] = useState<Resolution>('original');
+  const [showResolutionMenu, setShowResolutionMenu] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  useEffect(() => {
+    // 点击外部关闭分辨率菜单
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      const resolutionMenu = document.querySelector('.resolution-menu-container');
+      if (resolutionMenu && !resolutionMenu.contains(target)) {
+        setShowResolutionMenu(false);
+      }
+    };
+
+    if (showResolutionMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showResolutionMenu]);
 
   useEffect(() => {
     if (id) {
@@ -26,7 +67,7 @@ export default function VideoPlayer() {
       }, 3000);
 
       // 更新在线状态(仅登录用户)
-      let onlineInterval: NodeJS.Timeout | null = null;
+      let onlineInterval: number | null = null;
       if (user) {
         onlineService.updateActivity(user.id);
         onlineInterval = setInterval(() => {
@@ -164,15 +205,51 @@ export default function VideoPlayer() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* 视频播放器 */}
           <div className="lg:col-span-2">
-            <div className="bg-black rounded-xl overflow-hidden shadow-lg">
+            <div className="bg-black rounded-xl overflow-hidden shadow-lg relative">
               <video
-                src={video.videoUrl}
+                src={selectedResolution === 'original' ? video.videoUrl : getTranscodedUrl(video.videoUrl, '360p')}
                 controls
                 autoPlay
                 className="w-full aspect-video"
               >
                 您的浏览器不支持视频播放
               </video>
+              
+              {/* 分辨率选择器 */}
+              <div className="absolute bottom-4 right-4 resolution-menu-container">
+                <div className="relative">
+                  <button
+                    onClick={() => setShowResolutionMenu(!showResolutionMenu)}
+                    className="bg-black/70 hover:bg-black/90 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
+                  >
+                    <Settings size={14} />
+                    {resolutionOptions.find(r => r.value === selectedResolution)?.label}
+                    <ChevronDown size={14} className={`transition-transform ${showResolutionMenu ? 'rotate-180' : ''}`} />
+                  </button>
+                  
+                  {showResolutionMenu && (
+                    <div className="absolute right-0 mt-2 bg-gray-900 rounded-lg shadow-lg py-1 min-w-[100px] z-10">
+                      {resolutionOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => {
+                            setSelectedResolution(option.value);
+                            setShowResolutionMenu(false);
+                          }}
+                          className={`w-full px-4 py-2 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center gap-2 ${
+                            selectedResolution === option.value ? 'bg-gray-700' : ''
+                          }`}
+                        >
+                          {option.label}
+                          {selectedResolution === option.value && (
+                            <span className="ml-auto text-blue-400">✓</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="mt-6 bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm">
