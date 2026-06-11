@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS videos (
   uploadedBy TEXT NOT NULL,
   uploadedByName TEXT NOT NULL,
   uploadedAt TEXT NOT NULL,
-  views INTEGER NOT NULL DEFAULT 0
+  views INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '[]'
 );
 
 -- 评论表

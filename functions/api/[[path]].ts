@@ -13,11 +13,21 @@ export interface Env {
 
 const ADMIN_ACCOUNT = { id: 'admin-001', username: 'NXCm3', password: '8888aaaa', role: 'admin' as const };
 
+// 应用版本号 - 每次部署更新，用于检测手机端是否加载了最新版本
+const APP_VERSION = 'v1.0.0-' + new Date().toISOString().slice(0, 10);
+
 const jsonHeaders = (origin: string) => ({
   'Content-Type': 'application/json; charset=utf-8',
   'Access-Control-Allow-Origin': origin,
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  // 防止运营商/CDN缓存 API 响应（手机端常见问题）
+  'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+  'Pragma': 'no-cache',
+  'Expires': '0',
+  'X-App-Version': APP_VERSION,
+  // 防止 MIME 类型嗅探导致的安全问题
+  'X-Content-Type-Options': 'nosniff',
 });
 
 const getOrigin = (request: Request, env: Env) => {
@@ -140,7 +150,12 @@ const handleUploadChunk = async (request: Request, env: Env, origin: string) => 
   
   // 保存分片到临时位置
   const tempKey = `temp/${uploadId}/chunk-${chunkIndex}`;
-  await env.R2_BUCKET.put(tempKey, file.stream(), { httpMetadata: { contentType: file.type } });
+  await env.R2_BUCKET.put(tempKey, file.stream(), {
+    httpMetadata: {
+      contentType: file.type,
+      cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+    },
+  });
   
   console.log(`[分片上传] 分片 ${chunkIndex + 1}/${totalChunks} 上传成功, uploadId: ${uploadId}`);
   
@@ -192,7 +207,13 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
     const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
     const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
     
-    await env.R2_BUCKET.put(filename, mergedData, { httpMetadata: { contentType: 'application/octet-stream' } });
+    // ✅ 关键修复：合并后文件设置 cacheControl=no-cache，确保所有边缘节点取最新
+    await env.R2_BUCKET.put(filename, mergedData, {
+      httpMetadata: {
+        contentType: 'application/octet-stream',
+        cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+      },
+    });
     
     // 删除临时分片
     for (let i = 0; i < totalChunks; i++) {
@@ -234,8 +255,13 @@ const handleUpload = async (request: Request, env: Env, origin: string) => {
   try {
     console.log('[上传] 开始上传到 R2...');
     // 直接使用 request.body 流式上传到 R2，绕过 Worker 内存限制
+    // ✅ 关键修复：设置 cacheControl=no-cache 防止 Cloudflare CDN 缓存视频文件
+    // R2 的 r2.dev 域名有独立 CDN，必须显式禁用缓存
     await env.R2_BUCKET.put(filename, request.body, {
-      httpMetadata: { contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType },
+      httpMetadata: {
+        contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType,
+        cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+      },
     });
     console.log('[上传] 上传成功:', fileUrl);
     
@@ -257,7 +283,13 @@ const handleUploadForm = async (request: Request, env: Env, origin: string) => {
   const ext = file.name.split('.').pop() || '';
   const filename = `${timestamp}-${randomStr}.${ext}`;
 
-  await env.R2_BUCKET.put(filename, file.stream(), { httpMetadata: { contentType: file.type } });
+  // ✅ 关键修复：设置 cacheControl=no-cache 防止 Cloudflare CDN 缓存缩略图/小文件
+  await env.R2_BUCKET.put(filename, file.stream(), {
+    httpMetadata: {
+      contentType: file.type,
+      cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+    },
+  });
   const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
   const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
 
@@ -274,13 +306,23 @@ const handleVideosList = async (request: Request, env: Env, origin: string) => {
   } else {
     rows = await env.DB.prepare('SELECT * FROM videos ORDER BY uploadedAt DESC').all().then(r => r.results as any[]);
   }
-  return new Response(JSON.stringify(rows), { headers: jsonHeaders(origin) });
+  // 解析 tags JSON 字段
+  const parsed = rows.map(row => ({
+    ...row,
+    tags: (() => { try { return JSON.parse((row as any).tags || '[]'); } catch { return []; } })(),
+  }));
+  return new Response(JSON.stringify(parsed), { headers: jsonHeaders(origin) });
 };
 
 const handleVideoGet = async (request: Request, env: Env, id: string, origin: string) => {
   const row = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
   if (!row) return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: jsonHeaders(origin) });
-  return new Response(JSON.stringify(row), { headers: jsonHeaders(origin) });
+  // 解析 tags JSON 字段
+  const parsed = {
+    ...row,
+    tags: (() => { try { return JSON.parse((row as any).tags || '[]'); } catch { return []; } })(),
+  };
+  return new Response(JSON.stringify(parsed), { headers: jsonHeaders(origin) });
 };
 
 const handleVideoCreate = async (request: Request, env: Env, origin: string) => {
@@ -290,10 +332,16 @@ const handleVideoCreate = async (request: Request, env: Env, origin: string) => 
   }
   const now = new Date().toISOString();
   const id = genId('v-');
+  // 处理标签，最多5个
+  let tags: string[] = [];
+  if (body.tags && Array.isArray(body.tags)) {
+    tags = body.tags.slice(0, 5).map((t: string) => String(t).trim()).filter((t: string) => t.length > 0 && t.length <= 20);
+  }
+  const tagsJson = JSON.stringify(tags);
   await env.DB.prepare(
-    'INSERT INTO videos (id, title, description, thumbnail, videoUrl, uploadedBy, uploadedByName, uploadedAt, views) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)'
-  ).bind(id, body.title, body.description || '', body.thumbnail, body.videoUrl, body.uploadedBy, body.uploadedByName, now).run();
-  return new Response(JSON.stringify({ id, title: body.title, description: body.description || '', thumbnail: body.thumbnail, videoUrl: body.videoUrl, uploadedBy: body.uploadedBy, uploadedByName: body.uploadedByName, uploadedAt: now, views: 0 }), { headers: jsonHeaders(origin) });
+    'INSERT INTO videos (id, title, description, thumbnail, videoUrl, uploadedBy, uploadedByName, uploadedAt, views, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)'
+  ).bind(id, body.title, body.description || '', body.thumbnail, body.videoUrl, body.uploadedBy, body.uploadedByName, now, tagsJson).run();
+  return new Response(JSON.stringify({ id, title: body.title, description: body.description || '', thumbnail: body.thumbnail, videoUrl: body.videoUrl, uploadedBy: body.uploadedBy, uploadedByName: body.uploadedByName, uploadedAt: now, views: 0, tags }), { headers: jsonHeaders(origin) });
 };
 
 const handleVideoDelete = async (env: Env, id: string, origin: string) => {

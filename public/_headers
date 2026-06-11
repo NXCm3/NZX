@@ -1,4 +1,88 @@
-/*
-  Cache-Control: no-cache, no-store, must-revalidate
+# ============================================================
+# Cloudflare Pages _headers 文件 —— 解决手机端与电脑端不同步问题
+# 每次部署都生效，确保所有设备获取最新代码
+# ============================================================
+
+# 🔴 最高优先级：根路径 (/) 和 HTML 文件 - 永不缓存
+/
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
   Pragma: no-cache
   Expires: 0
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex
+
+/*.html
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
+  Pragma: no-cache
+  Expires: 0
+  X-Content-Type-Options: nosniff
+
+# 🔴 API 接口 - 永不缓存
+/api/*
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
+  Pragma: no-cache
+  Expires: 0
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+  Access-Control-Allow-Headers: Content-Type, Authorization
+  X-Content-Type-Options: nosniff
+
+/functions/*
+  Cache-Control: no-cache, no-store, must-revalidate, max-age=0
+  Pragma: no-cache
+  Expires: 0
+
+# 🟡 JS/CSS 资源文件 - 默认不缓存（文件名已有 contenthash，新部署会变）
+/assets/*.js
+  Cache-Control: public, max-age=60, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/assets/*.css
+  Cache-Control: public, max-age=60, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/*.js
+  Cache-Control: public, max-age=60, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/*.css
+  Cache-Control: public, max-age=60, must-revalidate
+  X-Content-Type-Options: nosniff
+
+# 🟢 图片/缩略图 - 中等缓存
+/*.png
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.jpg
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.jpeg
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.gif
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.webp
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.svg
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+/*.ico
+  Cache-Control: public, max-age=3600
+  X-Content-Type-Options: nosniff
+
+# 🟢 视频 - 中等缓存
+/*.mp4
+  Cache-Control: public, max-age=3600
+  Accept-Ranges: bytes
+/*.webm
+  Cache-Control: public, max-age=3600
+  Accept-Ranges: bytes
+
+# 🔴 其他所有路径 - 短缓存并要求重新验证
+/*
+  Cache-Control: public, max-age=60, must-revalidate
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin

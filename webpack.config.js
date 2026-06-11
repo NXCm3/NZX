@@ -9,7 +9,13 @@ module.exports = (env, argv) => {
     entry: './src/index.tsx',
     output: {
       path: path.resolve(__dirname, 'dist'),
-      filename: 'bundle.js',
+      // contenthash 确保文件内容变化时浏览器自动加载新版本
+      // 开发环境使用简单名称便于调试
+      filename: isDev ? 'bundle.js' : 'assets/[name].[contenthash:8].js',
+      chunkFilename: isDev ? '[name].chunk.js' : 'assets/[name].[contenthash:8].chunk.js',
+      // asset 文件名也使用 hash
+      assetModuleFilename: isDev ? 'assets/[name][ext]' : 'assets/[name].[contenthash:8][ext]',
+      clean: true, // 每次构建清理旧文件
       publicPath: 'auto'
     },
     module: {
@@ -49,8 +55,6 @@ module.exports = (env, argv) => {
         {
           test: /\.(png|jpe?g|gif|webp|ico|svg)$/i,
           type: 'asset',
-          // 方案 A：将小于 1MB 的图片资源内联为 dataURL，使 Webpack 产物和 Vite 产物在 OSS 上结构一致
-          // 消费端 HomeController 只需替换 link[href].css / script[src].js 即可预览
           parser: { dataUrlCondition: { maxSize: 1024 * 1024 } }
         },
         {
@@ -58,7 +62,6 @@ module.exports = (env, argv) => {
           type: 'asset/resource'
         },
         {
-          // 兜底规则：PDF、文档、音视频等所有其他文件一律输出为独立资源文件
           exclude: /\.(js|jsx|ts|tsx|mjs|css|json|html)$/i,
           type: 'asset/resource'
         }
@@ -68,7 +71,6 @@ module.exports = (env, argv) => {
       extensions: ['.mjs', '.ts', '.tsx', '.js', '.jsx']
     },
     devServer: {
-      // 约束 A：沙箱只开放一个代理端口，所有 builder（webpack/vite/electron）统一 3015
       port: 3015,
       host: '0.0.0.0',
       allowedHosts: 'all',
@@ -82,8 +84,36 @@ module.exports = (env, argv) => {
     plugins: [
       new HtmlWebpackPlugin({
         template: './index.html',
-        inject: 'body'
+        inject: 'body',
+        // 生产环境：给 script 标签加上时间戳 query，确保不缓存
+        ...(isDev ? {} : {
+          hash: true,
+          hashPrefix: Date.now().toString(),
+        })
       })
-    ]
+    ],
+    // 生产环境启用 source-map 但分离到独立文件
+    devtool: isDev ? 'eval-cheap-module-source-map' : 'source-map',
+    // 优化代码拆分
+    optimization: isDev ? {} : {
+      splitChunks: {
+        chunks: 'all',
+        cacheGroups: {
+          vendor: {
+            test: /[\\/]node_modules[\\/]/,
+            name: 'vendor',
+            chunks: 'all',
+            priority: 20
+          },
+          react: {
+            test: /[\\/]node_modules[\\/](react|react-dom|framer-motion)[\\/]/,
+            name: 'react-vendor',
+            chunks: 'all',
+            priority: 30
+          }
+        }
+      },
+      runtimeChunk: 'single'
+    }
   };
 };

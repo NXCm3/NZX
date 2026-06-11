@@ -12,6 +12,7 @@ export interface Video {
   uploadedByName: string;
   uploadedAt: string;
   views: number;
+  tags?: string[];
 }
 
 export interface Comment {
@@ -41,11 +42,20 @@ const ADMIN_ACCOUNT = {
   role: 'admin' as const,
 };
 
+// 防缓存的 HTTP 请求工具 - 解决移动运营商缓存导致的手机端不同步问题
 const http = async (url: string, options: RequestInit = {}) => {
-  const res = await fetch(API_BASE + url, {
+  // 添加防缓存参数：?_t=时间戳，确保每次请求都是新的
+  const cacheBuster = `${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+  const finalUrl = API_BASE + url + cacheBuster;
+
+  const res = await fetch(finalUrl, {
     ...options,
+    cache: 'no-store', // 不使用 HTTP 缓存
     headers: {
       'Content-Type': 'application/json',
+      // 防缓存头
+      'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
       ...(options.headers || {}),
     },
   });
@@ -78,7 +88,7 @@ export const videoService = {
     return http(`/videos?byUser=${encodeURIComponent(username)}`);
   },
 
-  add: async (video: Omit<Video, 'id' | 'uploadedAt' | 'views'>): Promise<Video> => {
+  add: async (video: Omit<Video, 'id' | 'uploadedAt' | 'views'> & { tags?: string[] }): Promise<Video> => {
     return http('/videos', {
       method: 'POST',
       body: JSON.stringify(video),

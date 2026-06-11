@@ -2,16 +2,27 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- ⚠️ 强力防缓存：每次部署都更新版本号确保手机端和电脑端同步 -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#3b82f6">
   <title>私有视频分享平台</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    /* 内联样式确保主题色立即生效，避免闪烁 */
     html, body {
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
+      -webkit-text-size-adjust: 100%;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-overflow-scrolling: touch;
     }
     html.light, html.light body {
       background-color: #ffffff !important;
@@ -21,36 +32,119 @@
       background-color: #1a1a1a !important;
       color: #ffffff;
     }
+    #root {
+      min-height: 100vh;
+      min-height: 100dvh;
+      padding-top: env(safe-area-inset-top, 0);
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    img {
+      -webkit-user-drag: none;
+      user-select: none;
+    }
+    input, textarea, select, button {
+      font-size: 16px;
+    }
+    * { touch-action: manipulation; }
+    html, body { overscroll-behavior-y: contain; }
+
+    /* 加载中样式（防止白屏 */
+    .app-loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+      color: #111827;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .app-loading .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #dbeafe;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      margin-bottom: 14px;
+    }
+    .app-loading .title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .app-loading .sub {
+      font-size: 12px;
+      color: #6b7280;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-color-scheme: dark) {
+      .app-loading { background: #111827; color: #f9fafb; }
+      .app-loading .spinner { border-color: #1e3a8a; border-top-color: #60a5fa; }
+      .app-loading .sub { color: #9ca3af; }
+    }
   </style>
+
   <script>
-    // 在 React 加载前立即设置主题，避免闪烁
+    // ============================================================
+    // 🔴 关键：在任何脚本加载前先检测并设置主题
+    // ============================================================
     (function() {
       const isInIframe = window.self !== window.top;
-
       function applyThemeToDOM(theme) {
         document.documentElement.classList.remove('light', 'dark');
         document.documentElement.classList.add(theme);
         document.documentElement.setAttribute('data-theme', theme);
       }
-
       if (isInIframe) {
-        // 监听父窗口主动推送的主题消息
         window.addEventListener('message', function(event) {
           if (event.data && typeof event.data.theme === 'string') {
             const theme = event.data.theme;
-            if (theme === 'light' || theme === 'dark') {
-              applyThemeToDOM(theme);
-            }
+            if (theme === 'light' || theme === 'dark') applyThemeToDOM(theme);
           }
         });
       } else {
-        // 非 iframe 环境，使用默认 light 主题
         applyThemeToDOM('light');
       }
+    })();
+
+    // ============================================================
+    // 🔴 关键：版本号检测——每次部署更新
+    // ============================================================
+    (function() {
+      // ⚠️ 每次部署修改这个版本号！手机端检测到变化就强制刷新
+      window.__APP_VERSION__ = '2026.06.11-v3';
+      try { localStorage.setItem('__APP_VERSION__', window.__APP_VERSION__); } catch(e) {}
+    })();
+
+    // ============================================================
+    // 🔴 关键：检测到已缓存的旧版本时立即刷新
+    // ============================================================
+    (function() {
+      try {
+        var cached = localStorage.getItem('__APP_VERSION__');
+        var current = window.__APP_VERSION__;
+        // 如果 localStorage 中没有记录，说明是首次访问 → 不需要刷新
+        // 如果有记录但不一样 → 是旧版本 → 需要刷新
+        // 但我们在加载此脚本时已经写入了新版本号
+        // 真正的版本检测会在 React 内完成
+        if (cached && cached !== current) {
+          console.log('[版本检测] 检测到旧版本，准备刷新');
+        }
+      } catch(e) {}
     })();
   </script>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div class="app-loading">
+      <div class="spinner"></div>
+      <div class="title">正在加载...</div>
+      <div class="sub">请稍候</div>
+    </div>
+  </div>
 </body>
 </html>
