@@ -110,23 +110,38 @@ async function generateR2PresignedUrl(
 
 // ---------- 大文件上传（流式，支持任意大小文件） ----------
 const handleUpload = async (request: Request, env: Env, origin: string) => {
+  console.log('[上传] 收到上传请求');
+  
   const url = new URL(request.url);
   const filename = url.searchParams.get('filename') || `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+  const contentLength = request.headers.get('Content-Length');
+  
+  console.log('[上传] 文件名:', filename);
+  console.log('[上传] Content-Type:', contentType);
+  console.log('[上传] Content-Length:', contentLength);
   
   if (!request.body) {
+    console.log('[上传] 错误: 没有请求体');
     return new Response(JSON.stringify({ error: 'No body provided' }), { status: 400, headers: jsonHeaders(origin) });
   }
 
   const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
   const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
 
-  // 直接使用 request.body 流式上传到 R2，绕过 Worker 内存限制
-  await env.R2_BUCKET.put(filename, request.body, {
-    httpMetadata: { contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType },
-  });
-
-  return new Response(JSON.stringify({ success: true, filename, url: fileUrl }), { headers: jsonHeaders(origin) });
+  try {
+    console.log('[上传] 开始上传到 R2...');
+    // 直接使用 request.body 流式上传到 R2，绕过 Worker 内存限制
+    await env.R2_BUCKET.put(filename, request.body, {
+      httpMetadata: { contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType },
+    });
+    console.log('[上传] 上传成功:', fileUrl);
+    
+    return new Response(JSON.stringify({ success: true, filename, url: fileUrl }), { headers: jsonHeaders(origin) });
+  } catch (error: any) {
+    console.error('[上传] 上传失败:', error.message);
+    return new Response(JSON.stringify({ error: 'Upload failed', message: error.message }), { status: 500, headers: jsonHeaders(origin) });
+  }
 };
 
 // ---------- 小文件上传（multipart/form-data，支持缩略图等小文件） ----------

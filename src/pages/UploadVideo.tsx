@@ -44,24 +44,58 @@ export default function UploadVideo() {
     const ext = file.name.split('.').pop() || '';
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
     const uploadUrl = `${R2_UPLOAD_URL}?filename=${encodeURIComponent(filename)}`;
+    console.log('[上传] 目标URL:', uploadUrl);
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      xhr.withCredentials = false;
+      
       xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+        if (e.lengthComputable && onProgress) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          console.log('[上传] 进度:', progress + '%', '已上传:', (e.loaded / 1024 / 1024).toFixed(2) + 'MB');
+          onProgress(progress);
+        }
       });
+      
+      xhr.addEventListener('loadstart', () => {
+        console.log('[上传] 连接已建立，开始传输...');
+      });
+      
       xhr.addEventListener('load', () => {
-        console.log('[上传] XHR完成, status:', xhr.status);
+        console.log('[上传] XHR完成, status:', xhr.status, 'readyState:', xhr.readyState);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const response = JSON.parse(xhr.responseText);
+            console.log('[上传] 响应:', response);
             resolve(response.url);
-          } catch { reject(new Error('解析响应失败')); }
-        } else { reject(new Error(`上传失败 (HTTP ${xhr.status})`)); }
+          } catch (e) {
+            console.error('[上传] 解析响应失败:', e);
+            reject(new Error('解析响应失败'));
+          }
+        } else {
+          console.error('[上传] HTTP错误:', xhr.status, xhr.statusText, xhr.responseText);
+          reject(new Error(`上传失败 (HTTP ${xhr.status}): ${xhr.statusText}`));
+        }
       });
-      xhr.addEventListener('error', () => reject(new Error('网络错误')));
-      xhr.addEventListener('abort', () => reject(new Error('上传被取消')));
-      xhr.open('POST', uploadUrl);
+      
+      xhr.addEventListener('error', (e) => {
+        console.error('[上传] XHR error事件:', e, 'status:', xhr.status);
+        reject(new Error('网络错误'));
+      });
+      
+      xhr.addEventListener('timeout', () => {
+        console.error('[上传] XHR超时');
+        reject(new Error('上传超时'));
+      });
+      
+      xhr.addEventListener('abort', () => {
+        console.error('[上传] XHR被取消');
+        reject(new Error('上传被取消'));
+      });
+      
+      xhr.open('POST', uploadUrl, true);
+      xhr.timeout = 30 * 60 * 1000; // 30分钟超时
       xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
       xhr.send(file);
     });
