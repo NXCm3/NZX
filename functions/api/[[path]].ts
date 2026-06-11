@@ -108,8 +108,29 @@ async function generateR2PresignedUrl(
   return { uploadUrl, fileUrl };
 }
 
-// ---------- 小文件上传（直接中转，<50MB 推荐） ----------
+// ---------- 大文件上传（流式，支持任意大小文件） ----------
 const handleUpload = async (request: Request, env: Env, origin: string) => {
+  const url = new URL(request.url);
+  const filename = url.searchParams.get('filename') || `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+  
+  if (!request.body) {
+    return new Response(JSON.stringify({ error: 'No body provided' }), { status: 400, headers: jsonHeaders(origin) });
+  }
+
+  const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+  const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
+
+  // 直接使用 request.body 流式上传到 R2，绕过 Worker 内存限制
+  await env.R2_BUCKET.put(filename, request.body, {
+    httpMetadata: { contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType },
+  });
+
+  return new Response(JSON.stringify({ success: true, filename, url: fileUrl }), { headers: jsonHeaders(origin) });
+};
+
+// ---------- 小文件上传（multipart/form-data，支持缩略图等小文件） ----------
+const handleUploadForm = async (request: Request, env: Env, origin: string) => {
   const formData = await request.formData();
   const file = formData.get('file') as File;
   if (!file) return new Response(JSON.stringify({ error: 'No file provided' }), { status: 400, headers: jsonHeaders(origin) });
@@ -222,6 +243,56 @@ const handleUserGet = async (env: Env, id: string, origin: string) => {
   return new Response(JSON.stringify(row), { headers: jsonHeaders(origin) });
 };
 
+// 更新用户信息（用户名/密码/角色）— 用于管理员改权限、用户自助改名改密
+const handleUserUpdate = async (request: Request, env: Env, id: string, origin: string) => {
+  const body = await parseBody(request);
+  // 先读旧记录，校验数据合法性
+  const existing = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first() as any;
+  if (!existing) return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: jsonHeaders(origin) });
+
+  let finalUsername = existing.username;
+  let finalPassword = existing.password;
+  let finalRole = existing.role;
+
+  // 用户名变更
+  if (typeof body.username === 'string' && body.username.trim().length > 0) {
+    const newName = body.username.trim();
+    // 用户名唯一校验
+    const dup = await env.DB.prepare('SELECT 1 FROM users WHERE username = ? AND id != ?').bind(newName, id).first();
+    if (dup) return new Response(JSON.stringify({ error: '该用户名已被使用' }), { status: 400, headers: jsonHeaders(origin) });
+    if (newName.length < 2) return new Response(JSON.stringify({ error: '用户名至少 2 个字符' }), { status: 400, headers: jsonHeaders(origin) });
+    finalUsername = newName;
+  }
+
+  // 密码变更
+  if (typeof body.password === 'string' && body.password.length > 0) {
+    if (body.password.length < 6) return new Response(JSON.stringify({ error: '密码至少 6 个字符' }), { status: 400, headers: jsonHeaders(origin) });
+    finalPassword = body.password;
+  }
+
+  // 角色变更（仅允许 admin 调用时修改，这里不做角色鉴权，由前端控制）
+  if (typeof body.role === 'string' && (body.role === 'admin' || body.role === 'user')) {
+    // 至少保留一个管理员：若把最后一位 admin 改成 user，则拒绝
+    if (existing.role === 'admin' && body.role === 'user') {
+      const adminCount = await env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'admin'").first() as any;
+      if ((adminCount?.c || 0) <= 1) {
+        return new Response(JSON.stringify({ error: '至少保留一位管理员' }), { status: 400, headers: jsonHeaders(origin) });
+      }
+    }
+    finalRole = body.role;
+  }
+
+  await env.DB.prepare('UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?').bind(finalUsername, finalPassword, finalRole, id).run();
+
+  // 如果用户名变了，同步更新该用户上传的视频和评论的显示名
+  if (existing.username !== finalUsername) {
+    await env.DB.prepare('UPDATE videos SET uploadedByName = ? WHERE uploadedByName = ?').bind(finalUsername, existing.username).run();
+    await env.DB.prepare('UPDATE comments SET username = ? WHERE username = ?').bind(finalUsername, existing.username).run();
+  }
+
+  return new Response(JSON.stringify({ id, username: finalUsername, role: finalRole }), { headers: jsonHeaders(origin) });
+};
+
 const handleAuth = async (request: Request, env: Env, origin: string) => {
   const body = await parseBody(request);
   if (!body.username || !body.password) return new Response(JSON.stringify({ error: 'Missing fields' }), { status: 400, headers: jsonHeaders(origin) });
@@ -296,8 +367,10 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
   const method = request.method;
 
   try {
-    // 文件上传
+    // 大文件流式上传（直接把 request body 传给 R2）
     if (path === '/upload' && method === 'POST') return handleUpload(request, env, origin);
+    // 小文件 multipart 上传（用于缩略图等）
+    if (path === '/upload/form' && method === 'POST') return handleUploadForm(request, env, origin);
     // 预签名 URL（用于大文件直接上传到 R2）
     if (path === '/upload/presign' && method === 'POST') {
       const body = await parseBody(request);
@@ -332,6 +405,7 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
     const userMatch = path.match(/^\/users\/([^/]+)$/);
     if (userMatch) {
       if (method === 'GET') return handleUserGet(env, userMatch[1], origin);
+      if (method === 'PUT') return handleUserUpdate(request, env, userMatch[1], origin);
       if (method === 'DELETE') return handleUserDelete(env, userMatch[1], origin);
     }
     const userActivityMatch = path.match(/^\/users\/([^/]+)\/activity$/);

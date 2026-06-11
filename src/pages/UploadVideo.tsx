@@ -33,72 +33,17 @@ export default function UploadVideo() {
     return null;
   }
 
-  // 大文件阈值：50MB 以上走预签名直传 R2（绕过 Worker 100MB 限制）
+  // 大文件阈值：50MB 以上走流式上传
   const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024;
 
-  // 上传文件到 R2
-  // 小文件(<50MB): POST /api/upload (Worker 中转)
-  // 大文件(>=50MB): 先尝试预签名直传，失败则降级到 Worker 中转
+  // 上传文件到 R2 - 使用 Worker 流式中转（支持任意大小文件）
   const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
-    // 大文件优先尝试预签名直传
-    const usePresign = file.size >= LARGE_FILE_THRESHOLD || file.size > 5 * 1024 * 1024;
+    console.log('[上传] 开始上传:', file.name, '大小:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
     
-    if (usePresign) {
-      console.log('[上传] 使用预签名方式, 文件:', file.name, '大小:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
-      try {
-        // 获取预签名上传 URL
-        const presignRes = await fetch('/api/upload/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: file.name,
-            contentType: file.type || 'application/octet-stream',
-          }),
-        });
-        
-        if (!presignRes.ok) {
-          const err = await presignRes.json().catch(() => ({}));
-          throw new Error(`获取预签名URL失败 (${presignRes.status}): ${err.error || '未知错误'}`);
-        }
-        
-        const { uploadUrl, fileUrl } = await presignRes.json();
-        console.log('[上传] 预签名URL获取成功, uploadUrl:', uploadUrl);
-
-        // 尝试预签名上传
-        try {
-          return await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.upload.addEventListener('progress', (e) => {
-              if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
-            });
-            xhr.addEventListener('load', () => {
-              console.log('[上传] XHR完成, status:', xhr.status);
-              if (xhr.status >= 200 && xhr.status < 300) resolve(fileUrl);
-              else reject(new Error(`R2上传失败 (HTTP ${xhr.status})`));
-            });
-            xhr.addEventListener('error', () => {
-              console.error('[上传] XHR error');
-              reject(new Error('预签名上传失败'));
-            });
-            xhr.addEventListener('abort', () => reject(new Error('上传被取消')));
-            xhr.open('PUT', uploadUrl);
-            xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-            xhr.send(file);
-          });
-        } catch (presignErr: any) {
-          console.log('[上传] 预签名直传失败，尝试降级到 Worker 中转:', presignErr.message);
-          // 降级到 Worker 中转
-        }
-      } catch (err: any) {
-        console.error('[上传] 预签名上传失败:', err.message);
-        console.log('[上传] 降级到 Worker 中转模式');
-      }
-    }
-
-    // Worker 中转模式
-    console.log('[上传] 使用 Worker 中转方式上传');
-    const formData = new FormData();
-    formData.append('file', file);
+    // 生成唯一文件名
+    const ext = file.name.split('.').pop() || '';
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+    const uploadUrl = `${R2_UPLOAD_URL}?filename=${encodeURIComponent(filename)}`;
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -106,16 +51,19 @@ export default function UploadVideo() {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
       });
       xhr.addEventListener('load', () => {
+        console.log('[上传] XHR完成, status:', xhr.status);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const response = JSON.parse(xhr.responseText);
             resolve(response.url);
           } catch { reject(new Error('解析响应失败')); }
-        } else { reject(new Error(`上传失败: ${xhr.status}`)); }
+        } else { reject(new Error(`上传失败 (HTTP ${xhr.status})`)); }
       });
       xhr.addEventListener('error', () => reject(new Error('网络错误')));
-      xhr.open('POST', R2_UPLOAD_URL);
-      xhr.send(formData);
+      xhr.addEventListener('abort', () => reject(new Error('上传被取消')));
+      xhr.open('POST', uploadUrl);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.send(file);
     });
   };
 
