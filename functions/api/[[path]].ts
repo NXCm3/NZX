@@ -159,8 +159,8 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
   console.log('[分片上传] 合并分片:', uploadId, '文件名:', filename, '分片数:', totalChunks);
   
   try {
-    // 获取所有分片
-    const chunks: ReadableStream<Uint8Array>[] = [];
+    // 读取所有分片数据到内存
+    const chunkData: Uint8Array[] = [];
     
     for (let i = 0; i < totalChunks; i++) {
       const tempKey = `temp/${uploadId}/chunk-${i}`;
@@ -170,29 +170,29 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
         return new Response(JSON.stringify({ error: `分片 ${i} 缺失` }), { status: 400, headers: jsonHeaders(origin) });
       }
       
-      chunks.push(obj.body as ReadableStream<Uint8Array>);
+      // 将分片内容读取到 Uint8Array
+      const arrayBuffer = await obj.arrayBuffer();
+      chunkData.push(new Uint8Array(arrayBuffer));
+      console.log(`[分片上传] 读取分片 ${i + 1}/${totalChunks}, 大小: ${arrayBuffer.byteLength}`);
     }
     
-    // 合并所有分片
-    const concatenatedStream = new ReadableStream({
-      async pull(controller) {
-        for (const chunkStream of chunks) {
-          const reader = chunkStream.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-        }
-        controller.close();
-      }
-    });
+    // 计算总大小并合并
+    const totalSize = chunkData.reduce((sum, chunk) => sum + chunk.length, 0);
+    const mergedData = new Uint8Array(totalSize);
+    let offset = 0;
+    
+    for (const chunk of chunkData) {
+      mergedData.set(chunk, offset);
+      offset += chunk.length;
+    }
+    
+    console.log('[分片上传] 合并完成, 总大小:', totalSize);
     
     // 上传合并后的文件
     const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
     const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
     
-    await env.R2_BUCKET.put(filename, concatenatedStream, { httpMetadata: { contentType: 'application/octet-stream' } });
+    await env.R2_BUCKET.put(filename, mergedData, { httpMetadata: { contentType: 'application/octet-stream' } });
     
     // 删除临时分片
     for (let i = 0; i < totalChunks; i++) {
@@ -200,7 +200,7 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
       await env.R2_BUCKET.delete(tempKey);
     }
     
-    console.log('[分片上传] 合并完成:', fileUrl);
+    console.log('[分片上传] 上传完成:', fileUrl);
     
     return new Response(JSON.stringify({ success: true, url: fileUrl }), { headers: jsonHeaders(origin) });
     
