@@ -1,4 +1,4 @@
-// 统一 API 工具 - 确保手机端和电脑端获取最新数据
+// 统一 API 工具 - 使用完整 URL，确保网页版和手机版都能正常工作
 // 核心特性：
 // 1. 所有请求添加防缓存头，防止运营商/CDN缓存
 // 2. 时间戳 query 参数防止 HTTP 缓存
@@ -6,28 +6,17 @@
 
 import { APP_VERSION } from '../utils/version';
 
-const API_BASE = '/api';
-
-// 全局状态：是否已提示有新版本
-let hasPromptedNewVersion = false;
+// 统一使用完整 URL（CORS 已在 Cloudflare 配置）
+// 这样网页版和 APK 版都使用同一个 API，数据完全同步
+const API_BASE = 'https://nzx-5o4.pages.dev/api';
 
 /**
- * 检查响应头中的版本号，检测是否有新版本
- * 如果检测到服务器版本与本地版本不一致，提示用户刷新
+ * 响应头版本检测已移除
+ * 统一使用 AppUpdateManager 组件进行版本检测
+ * 避免与原生更新机制冲突
  */
 function checkAppVersion(response: Response) {
-  const serverVersion = response.headers.get('X-App-Version');
-  if (serverVersion && serverVersion !== APP_VERSION && !hasPromptedNewVersion) {
-    hasPromptedNewVersion = true;
-    console.log(`[版本检测] 检测到新版本: 本地=${APP_VERSION}, 服务器=${serverVersion}`);
-    // 延迟提示，避免打断当前操作
-    setTimeout(() => {
-      if (confirm('检测到应用有新版本，是否立即刷新以加载最新版本？')) {
-        // 强制清除缓存后刷新
-        window.location.reload();
-      }
-    }, 1000);
-  }
+  // 空实现 - 版本检测由 AppUpdateManager 统一处理
 }
 
 /**

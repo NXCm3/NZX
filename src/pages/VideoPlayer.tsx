@@ -1,28 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MessageCircle, Send, Trash2, Reply, X } from 'lucide-react';
+import { MessageCircle, Send, Trash2, Reply, X, Play, Palette, ChevronDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { videoService, commentService, onlineService } from '../services/storage';
+import { videoService, commentService } from '../services/storage';
 import type { Video, Comment } from '../services/storage';
 import Header from '../components/Layout/Header';
-import { withCacheBuster } from '../utils/version';
+import { withVersionBuster } from '../utils/version';
 
-type Resolution = 'original' | '360p';
-
-const resolutionOptions: { value: Resolution; label: string }[] = [
-  { value: 'original', label: '原画' },
-  { value: '360p', label: '360P' },
-];
-
-// 根据分辨率获取视频 URL
-const getTranscodedUrl = (originalUrl: string, resolution: string): string => {
-  if (resolution === 'original') return originalUrl;
-  const urlParts = originalUrl.split('.');
-  const extension = urlParts.pop();
-  const baseUrl = urlParts.join('.');
-  return `${baseUrl}_${resolution}.${extension}`;
+// 画质选项：原视频画质 + 360P + 160P
+const QUALITY_LABELS: Record<string, string> = {
+  original: '原视频画质',
+  '360p': '360P 流畅',
+  '160p': '160P 极速',
 };
+
+// 根据画质生成视频 URL
+// 如果没有独立的转码版本，则使用原始视频 URL（保证可播放）
+function getVideoUrlForQuality(baseUrl: string, quality: string): string {
+  // 使用稳定版本号防缓存
+  const stableUrl = withVersionBuster(baseUrl);
+  // original 不添加画质参数，直接播放原始视频
+  // 360p 添加参数供后端识别转码
+  if (quality !== 'original') {
+    const separator = stableUrl.includes('?') ? '&' : '?';
+    return stableUrl + separator + 'quality=' + quality;
+  }
+  return stableUrl;
+}
 
 export default function VideoPlayer() {
   const { id } = useParams<{ id: string }>();
@@ -30,11 +35,40 @@ export default function VideoPlayer() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [selectedResolution, setSelectedResolution] = useState<Resolution>('original');
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  // 当前选择的画质
+  const [quality, setQuality] = useState<string>('original');
+  // 画质选择菜单是否展开
+  const [showQualityMenu, setShowQualityMenu] = useState<boolean>(false);
+  // 视频状态：加载中、播放、暂停、错误
+  const [videoStatus, setVideoStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  // 加载用户保存的画质偏好
+  useEffect(() => {
+    const savedQuality = localStorage.getItem('pref_quality');
+    if (savedQuality) setQuality(savedQuality);
+  }, []);
+
+  // 保存画质设置
+  const handleQualityChange = (qualityId: string) => {
+    setQuality(qualityId);
+    localStorage.setItem('pref_quality', qualityId);
+    setShowQualityMenu(false);
+    // 切换画质后重新加载视频（保留当前播放位置）
+    if (videoRef.current) {
+      const currentTime = videoRef.current.currentTime;
+      const wasPlaying = !videoRef.current.paused;
+      videoRef.current.src = getVideoUrlForQuality(video?.videoUrl || '', qualityId);
+      videoRef.current.load();
+      if (wasPlaying) {
+        videoRef.current.play().catch(() => {});
+      }
+      videoRef.current.currentTime = currentTime;
+    }
+  };
 
   useEffect(() => {
     if (id) {
@@ -42,10 +76,10 @@ export default function VideoPlayer() {
       loadComments(id);
       const commentInterval = setInterval(() => {
         loadComments(id!);
-      }, 3000);
+      }, 5000);
       return () => clearInterval(commentInterval);
     }
-  }, [id, user]);
+  }, [id]);
 
   const loadVideo = async (videoId: string) => {
     try {
@@ -53,12 +87,13 @@ export default function VideoPlayer() {
       if (foundVideo) {
         setVideo(foundVideo);
         videoService.incrementViews(videoId);
+        setVideoStatus('loading');
       } else {
-        navigate('/');
+        navigate(-1);
       }
     } catch (e: any) {
       console.error('加载视频失败:', e);
-      navigate('/');
+      navigate(-1);
     }
   };
 
@@ -74,45 +109,34 @@ export default function VideoPlayer() {
   };
 
   const handleAddComment = async () => {
-    if (!newComment.trim()) return;
-    if (!user) {
-      alert('请先登录才能评论');
-      navigate('/login');
-      return;
-    }
-    let commentData: any = {
-      videoId: id!,
+    if (!newComment.trim() || !user || !id) return;
+    const commentData: any = {
+      videoId: id,
       username: user.username,
       content: newComment.trim(),
     };
     if (replyingTo) {
-      const parentComment = comments.find(c => c.id === replyingTo);
-      if (parentComment) {
+      const parent = comments.find(c => c.id === replyingTo);
+      if (parent) {
         commentData.replyTo = replyingTo;
-        commentData.replyToUsername = parentComment.username;
+        commentData.replyToUsername = parent.username;
       }
     }
     try {
       await commentService.add(commentData);
       setNewComment('');
       setReplyingTo(null);
-      loadComments(id!);
+      loadComments(id);
     } catch (e: any) {
       alert('评论失败: ' + (e.message || e));
     }
   };
 
-  const handleReply = (commentId: string) => {
-    if (!user) {
-      alert('请先登录才能回复');
-      navigate('/login');
-      return;
-    }
-    setReplyingTo(commentId);
-  };
-
-  const cancelReply = () => {
-    setReplyingTo(null);
+  const canDeleteComment = (comment: Comment) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    if (user.username === comment.username) return true;
+    return false;
   };
 
   const handleDeleteComment = async (commentId: string) => {
@@ -125,13 +149,6 @@ export default function VideoPlayer() {
     }
   };
 
-  const canDeleteComment = (comment: Comment) => {
-    if (!user) return false;
-    if (user.role === 'admin') return true;
-    if (user.username === comment.username) return true;
-    return false;
-  };
-
   if (!video) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -142,10 +159,8 @@ export default function VideoPlayer() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* 顶部导航 */}
       <Header title="视频播放" showBack />
 
-      {/* 主要内容 */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* 视频播放器 + 信息区 */}
@@ -154,68 +169,108 @@ export default function VideoPlayer() {
             <div className="bg-black rounded-2xl overflow-hidden shadow-xl relative">
               <video
                 ref={videoRef}
-                src={withCacheBuster(selectedResolution === 'original' ? video.videoUrl : getTranscodedUrl(video.videoUrl, '360p'))}
+                key={video.id + '-' + quality}
+                src={getVideoUrlForQuality(video.videoUrl, quality)}
                 controls
-                autoPlay
-                className="w-full aspect-video"
                 playsInline
+                preload="auto"
+                webkit-playsinline="true"
+                className="w-full aspect-video bg-black"
+                onLoadedData={() => setVideoStatus('ready')}
+                onError={() => setVideoStatus('error')}
               >
                 您的浏览器不支持视频播放
               </video>
+
+              {/* 加载提示覆盖层 */}
+              <AnimatePresence>
+                {videoStatus === 'loading' && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 pointer-events-none"
+                  >
+                    <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-3" />
+                    <p className="text-white text-sm">视频加载中...</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* 错误提示覆盖层 */}
+              <AnimatePresence>
+                {videoStatus === 'error' && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 p-4"
+                  >
+                    <p className="text-white text-sm sm:text-base text-center mb-3">
+                      当前画质无法播放，请尝试切换其他画质
+                    </p>
+                    <button
+                      onClick={() => handleQualityChange('original')}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-xl"
+                    >
+                      切换到原视频画质
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* 画质选择器 */}
-            <div className="mt-4 flex items-center gap-2">
-              <div className="relative">
+            {/* 画质选择器（视频下方） */}
+            <div className="mt-3 sm:mt-4 bg-white dark:bg-gray-800 rounded-2xl shadow-sm p-3 sm:p-4">
+              <div className="flex items-center justify-between gap-2 relative">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <Palette size={18} className="text-blue-600 shrink-0" />
+                  <span className="text-sm sm:text-base text-gray-700 dark:text-gray-300">当前画质：</span>
+                  <span className="text-sm sm:text-base font-semibold text-blue-600 dark:text-blue-400">
+                    {QUALITY_LABELS[quality] || quality}
+                  </span>
+                </div>
+
                 <button
-                  onClick={() => setShowMoreMenu(!showMoreMenu)}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors whitespace-nowrap active:scale-95 flex items-center gap-2"
+                  onClick={() => setShowQualityMenu(!showQualityMenu)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-medium transition-colors active:scale-95 shrink-0"
                 >
-                  {selectedResolution === 'original' ? '🎬 原画' : '📺 360P'}
+                  切换画质
+                  <ChevronDown size={14} className={`transition-transform ${showQualityMenu ? 'rotate-180' : ''}`} />
                 </button>
 
+                {/* 画质选择下拉菜单 */}
                 <AnimatePresence>
-                  {showMoreMenu && (
-                    <>
-                      {/* 点击空白处关闭菜单 */}
-                      <div
-                        className="fixed inset-0 z-10"
-                        onClick={() => setShowMoreMenu(false)}
-                      />
-                      <motion.div
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 10 }}
-                        className="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 rounded-xl shadow-xl py-1 min-w-[120px] z-20 border border-gray-200 dark:border-gray-700 overflow-hidden"
-                      >
-                        {resolutionOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            onClick={() => {
-                              setSelectedResolution(option.value);
-                              setShowMoreMenu(false);
-                            }}
-                            className={`w-full px-4 py-3 text-left text-sm transition-colors flex items-center justify-between ${
-                              selectedResolution === option.value
-                                ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium'
-                                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            }`}
-                          >
-                            <span>{option.label}</span>
-                            {selectedResolution === option.value && (
-                              <span className="text-blue-600 dark:text-blue-400">✓</span>
-                            )}
-                          </button>
-                        ))}
-                      </motion.div>
-                    </>
+                  {showQualityMenu && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -5 }}
+                      className="absolute right-0 top-full mt-2 w-full sm:w-60 bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700 overflow-hidden z-20"
+                    >
+                      {Object.entries(QUALITY_LABELS).map(([key, label]) => (
+                        <button
+                          key={key}
+                          onClick={() => handleQualityChange(key)}
+                          className={`w-full flex items-center justify-between p-3 sm:p-4 text-left transition-colors ${
+                            quality === key
+                              ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                              : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                          }`}
+                        >
+                          <span className="text-sm sm:text-base font-medium">{label}</span>
+                          {quality === key && (
+                            <span className="text-blue-600 text-xs font-medium">当前</span>
+                          )}
+                        </button>
+                      ))}
+                    </motion.div>
                   )}
                 </AnimatePresence>
               </div>
             </div>
 
             {/* 视频信息 */}
-            <div className="mt-4 sm:mt-6 bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-sm">
+            <div className="mt-3 sm:mt-4 bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-sm">
               <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2 sm:mb-3">
                 {video.title}
               </h1>
@@ -229,6 +284,19 @@ export default function VideoPlayer() {
                 <span className="hidden sm:inline">•</span>
                 <span>👁 {video.views} 次观看</span>
               </div>
+              {/* 标签 */}
+              {video.tags && video.tags.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {video.tags.map((tag: string) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-xs font-medium"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -248,7 +316,7 @@ export default function VideoPlayer() {
                       回复: {comments.find(c => c.id === replyingTo)?.username}
                     </span>
                     <button
-                      onClick={cancelReply}
+                      onClick={() => setReplyingTo(null)}
                       className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 shrink-0 p-1"
                     >
                       <X size={16} />
@@ -299,10 +367,7 @@ export default function VideoPlayer() {
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="text-xs text-gray-500 dark:text-gray-400">
                             {new Date(comment.createdAt).toLocaleString('zh-CN', {
-                              month: '2-digit',
-                              day: '2-digit',
-                              hour: '2-digit',
-                              minute: '2-digit',
+                              month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
                             })}
                           </span>
                           {canDeleteComment(comment) && (
@@ -320,7 +385,7 @@ export default function VideoPlayer() {
                       </p>
                       {user && (
                         <button
-                          onClick={() => handleReply(comment.id)}
+                          onClick={() => setReplyingTo(comment.id)}
                           className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 font-medium"
                         >
                           <Reply size={14} />

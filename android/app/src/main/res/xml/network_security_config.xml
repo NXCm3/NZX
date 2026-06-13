@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config>
+        <domain includeSubdomains="true">nzx-5o4.pages.dev</domain>
+        <domain includeSubdomains="true">pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev</domain>
+        <domain includeSubdomains="true">350291.xyz</domain>
+    </domain-config>
+</network-security-config>

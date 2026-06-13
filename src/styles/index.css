@@ -16,16 +16,21 @@
 }
 
 :root {
-  --bg-color: #ffffff;
-  --text-color: #000000;
-  --text-secondary: #8a8a8a;
+  --bg-color: #f9fafb;
+  --text-color: #111827;
+  --text-secondary: #6b7280;
+  --card-bg: #ffffff;
+  --border-color: #e5e7eb;
 }
 
+/* 深色主题 - 背景黑色，文字白色 */
 :root.dark,
 [data-theme='dark'] {
-  --bg-color: #1a1a1a;
+  --bg-color: #111111;
   --text-color: #ffffff;
   --text-secondary: #9ca3af;
+  --card-bg: #1f1f1f;
+  --border-color: #374151;
 }
 
 html, body {
@@ -43,6 +48,18 @@ html, body {
   color: var(--text-color);
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* 根容器背景 */
+.min-h-screen {
+  background-color: var(--bg-color);
+}
+
+/* 卡片容器 - 在深色模式下自动切换 */
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
 }
 
 /* 防止iOS中长按选中（除文本输入框） */

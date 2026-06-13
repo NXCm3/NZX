@@ -66,18 +66,73 @@ export default function UploadVideo() {
   // 分片上传配置
   const CHUNK_SIZE = 20 * 1024 * 1024;
 
-  // 防缓存的 fetch 包装：添加时间戳和防缓存头，解决手机端缓存问题
+  // 统一使用完整域名访问 API（网页版和手机版都用同一个地址）
+  const apiBase = 'https://nzx-5o4.pages.dev';
+
+  // 防缓存的 fetch 包装：添加时间戳和防缓存头
+  // 所有环境都使用完整 URL
   const noCacheFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
-    const cacheBuster = `${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-    return fetch(url + cacheBuster, {
-      ...options,
-      cache: 'no-store',
-      headers: {
+    const fullUrl = url.startsWith('/') ? apiBase + url : url;
+    const cacheBuster = `${fullUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    const finalUrl = fullUrl + cacheBuster;
+    
+    console.log('[Upload] fetch URL:', finalUrl);
+    console.log('[Upload] fetch method:', options.method || 'GET');
+    console.log('[Upload] fetch has body:', !!options.body);
+    console.log('[Upload] fetch headers:', JSON.stringify(options.headers || {}));
+
+    // 🔴 关键修复：如果是 FormData，不要手动设置 Content-Type，让浏览器自动设置（包含 boundary）
+    const isFormData = typeof FormData !== 'undefined' && (options.body instanceof FormData || (typeof options.body === 'object' && options.body !== null && options.body.constructor && options.body.constructor.name === 'FormData'));
+
+    try {
+      const headers: Record<string, string> = {
         'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
-        ...(options.headers || {}),
-      } as any,
-    });
+      };
+
+      // 只有非 FormData 请求才合并用户的 headers
+      if (!isFormData && options.headers) {
+        const hs = options.headers as Record<string, string>;
+        for (const k of Object.keys(hs)) {
+          headers[k] = hs[k];
+        }
+      } else if (!isFormData) {
+        // 如果是 JSON 等请求，保持原来的 Content-Type 默认
+        if (options.headers) {
+          const hs = options.headers as Record<string, string>;
+          for (const k of Object.keys(hs)) {
+            headers[k] = hs[k];
+          }
+        }
+      }
+
+      const response = await fetch(finalUrl, {
+        method: options.method || 'GET',
+        body: options.body,
+        headers: headers,
+        cache: 'no-store',
+        mode: 'cors',
+      });
+
+      console.log('[Upload] fetch 响应状态:', response.status, response.statusText);
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        console.error('[Upload] ❌ HTTP 错误:', response.status, '-', errText);
+        throw new Error(`HTTP ${response.status}: ${errText}`);
+      }
+
+      return response;
+    } catch (e: any) {
+      console.error('[Upload] ❌ fetch 异常:', e);
+      console.error('[Upload] ❌ 异常类型:', e.constructor.name, '- 消息:', e.message);
+      console.error('[Upload] ❌ 最终请求 URL:', finalUrl);
+
+      if (e.name === 'TypeError' || e.message?.includes('Failed to fetch')) {
+        throw new Error('网络请求失败，请检查网络连接（URL: ' + apiBase + '）');
+      }
+      throw e;
+    }
   };
 
   const uploadToR2 = async (file: File, onProgress?: (progress: number) => void): Promise<string> => {
@@ -86,62 +141,84 @@ export default function UploadVideo() {
     const filename = `${fileId}.${ext}`;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
+    console.log('[Upload] ========== 开始上传 ==========');
+    console.log('[Upload] 文件名:', filename, '文件大小:', file.size, '字节', '分片数:', totalChunks);
+    console.log('[Upload] API 基础地址:', apiBase);
+
     // 创建上传会话
-    const sessionRes = await noCacheFetch('/api/upload/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename, fileSize: file.size, totalChunks }),
-    });
-
-    if (!sessionRes.ok) {
-      const err = await sessionRes.json().catch(() => ({}));
-      throw new Error(`创建上传会话失败: ${err.error || '未知错误'}`);
-    }
-
-    const { uploadId } = await sessionRes.json();
-
-    // 上传所有分片
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-
-      const formData = new FormData();
-      formData.append('file', chunk, `chunk-${chunkIndex}`);
-      formData.append('uploadId', uploadId);
-      formData.append('chunkIndex', String(chunkIndex));
-      formData.append('totalChunks', String(totalChunks));
-
-      const chunkRes = await noCacheFetch('/api/upload/chunk', {
+    const sessionUrl = apiBase + '/api/upload/init';
+    console.log('[Upload] 1) 创建上传会话 → POST', sessionUrl);
+    try {
+      const sessionRes = await noCacheFetch('/api/upload/init', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, fileSize: file.size, totalChunks }),
       });
 
-      if (!chunkRes.ok) {
-        const err = await chunkRes.json().catch(() => ({}));
-        throw new Error(`上传分片 ${chunkIndex + 1} 失败: ${err.error || '未知错误'}`);
+      if (!sessionRes.ok) {
+        const errText = await sessionRes.text().catch(() => '');
+        console.error('[Upload] ❌ 会话创建失败，状态:', sessionRes.status, '内容:', errText);
+        const err = await sessionRes.json().catch(() => ({}));
+        throw new Error(`创建上传会话失败 (${sessionRes.status}): ${err.error || errText}`);
       }
 
-      if (onProgress) {
-        const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
-        onProgress(progress);
+      const sessionJson = await sessionRes.json();
+      const { uploadId } = sessionJson;
+      console.log('[Upload] ✅ 会话创建成功，uploadId:', uploadId);
+
+      // 上传所有分片
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('file', chunk, `chunk-${chunkIndex}`);
+        formData.append('uploadId', uploadId);
+        formData.append('chunkIndex', String(chunkIndex));
+        formData.append('totalChunks', String(totalChunks));
+
+        const chunkRes = await noCacheFetch('/api/upload/chunk', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!chunkRes.ok) {
+          const errText = await chunkRes.text().catch(() => '');
+          console.error('[Upload] ❌ 分片上传失败，分片:', chunkIndex, '状态:', chunkRes.status, '内容:', errText);
+          const err = await chunkRes.json().catch(() => ({}));
+          throw new Error(`上传分片 ${chunkIndex + 1} 失败 (${chunkRes.status}): ${err.error || errText}`);
+        }
+        console.log('[Upload] ✅ 分片', chunkIndex + 1, '/', totalChunks, '上传成功');
+
+        if (onProgress) {
+          const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+          onProgress(progress);
+        }
       }
+
+      // 合并分片
+      console.log('[Upload] 3) 合并分片 → POST', apiBase + '/api/upload/complete');
+      const mergeRes = await noCacheFetch('/api/upload/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadId, filename, totalChunks }),
+      });
+
+      if (!mergeRes.ok) {
+        const errText = await mergeRes.text().catch(() => '');
+        console.error('[Upload] ❌ 合并失败，状态:', mergeRes.status, '内容:', errText);
+        const err = await mergeRes.json().catch(() => ({}));
+        throw new Error(`合并分片失败 (${mergeRes.status}): ${err.error || errText}`);
+      }
+
+      const { url } = await mergeRes.json();
+      console.log('[Upload] ✅ 全部完成，最终 URL:', url);
+      return url;
+    } catch (err: any) {
+      console.error('[Upload] ❌ 上传异常:', err?.message || err, err);
+      throw err;
     }
-
-    // 合并分片
-    const mergeRes = await noCacheFetch('/api/upload/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, filename, totalChunks }),
-    });
-
-    if (!mergeRes.ok) {
-      const err = await mergeRes.json().catch(() => ({}));
-      throw new Error(`合并分片失败: ${err.error || '未知错误'}`);
-    }
-
-    const { url } = await mergeRes.json();
-    return url;
   };
 
   const handleUpload = async () => {

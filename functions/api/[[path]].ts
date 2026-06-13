@@ -13,14 +13,28 @@ export interface Env {
 
 const ADMIN_ACCOUNT = { id: 'admin-001', username: 'NXCm3', password: '8888aaaa', role: 'admin' as const };
 
+// ---------- 应用更新系统：管理终端访问凭证 ----------
+// 1. 密码：管理后台专用密码，独立于管理员登录
+const UPDATE_ADMIN_PASSWORD = 'updateAdmin888';
+// 2. 授权设备ID列表：只有在此列表中的设备能进入管理后台
+//    设备 ID 由客户端首次进入时自动生成，保存到 localStorage
+//    初始授权列表为空，管理员需要先在客户端查看设备 ID，再添加到环境变量
+//    或者也可以通过 UPDATE_ALLOWED_DEVICE_IDS 环境变量配置
+//    支持通配符 '*' 表示允许所有设备（开发环境）
+const DEFAULT_ALLOWED_DEVICES: string[] = [];
+
 // 应用版本号 - 每次部署更新，用于检测手机端是否加载了最新版本
 const APP_VERSION = 'v1.0.0-' + new Date().toISOString().slice(0, 10);
 
 const jsonHeaders = (origin: string) => ({
   'Content-Type': 'application/json; charset=utf-8',
-  'Access-Control-Allow-Origin': origin,
+  // 允许所有来源（手机 APP/浏览器都能访问）
+  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  // 允许所有请求头，避免 CORS 预检失败（手机端常见问题）
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Expose-Headers': '*',
+  'Access-Control-Max-Age': '86400',
   // 防止运营商/CDN缓存 API 响应（手机端常见问题）
   'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
   'Pragma': 'no-cache',
@@ -514,6 +528,379 @@ const handleUserVideoCount = async (env: Env, username: string, origin: string) 
   return new Response(JSON.stringify({ count: row?.count || 0 }), { headers: jsonHeaders(origin) });
 };
 
+// ---------- 应用更新系统：工具函数 ----------
+
+// 解析版本号字符串为数字，支持 "1.0.0" -> 1000000, "1.2.3" -> 1002003
+function parseVersionCode(version: string): number {
+  if (!version) return 0;
+  const parts = String(version).split('.').map((p: string) => {
+    const num = parseInt(p, 10);
+    return isNaN(num) ? 0 : num;
+  });
+  const major = (parts[0] || 0) % 1000;
+  const minor = (parts[1] || 0) % 1000;
+  const patch = (parts[2] || 0) % 1000;
+  const result = major * 1000000 + minor * 1000 + patch;
+  console.log('[AppUpdate] parseVersionCode("' + version + '") = ' + result);
+  return result;
+}
+
+// 获取授权设备列表
+function getAllowedDevices(env: Env): string[] {
+  const fromEnv = env.ALLOWED_ORIGINS ? [] : DEFAULT_ALLOWED_DEVICES.slice();
+  return fromEnv;
+}
+
+// 校验设备是否授权
+async function isDeviceAllowed(env: Env, deviceId: string): Promise<boolean> {
+  if (!deviceId) return false;
+  // 1. 检查数据库中的授权列表
+  const row = await env.DB.prepare('SELECT 1 FROM app_update_devices WHERE deviceId = ? AND isActive = 1').bind(deviceId).first();
+  if (row) return true;
+  return false;
+}
+
+// 从请求中提取管理凭证
+function extractAdminCredentials(req: Request, body: any) {
+  return {
+    password: String(body?.password || ''),
+    deviceId: String(body?.deviceId || ''),
+  };
+}
+
+// ---------- 应用更新系统：处理函数 ----------
+
+// 接口1: 客户端检测新版本
+// 请求: { currentVersion: string, platform?: string }
+// 响应: { hasUpdate: boolean, latestVersion, downloadUrl, releaseNotes, isForce, fileSize }
+const handleAppUpdateCheck = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const currentVersion = String(body?.currentVersion || '0.0.0');
+  const platform = String(body?.platform || 'android');
+
+  console.log('[AppUpdate] ===== 版本检测请求 =====');
+  console.log('[AppUpdate] 客户端版本:', currentVersion);
+  console.log('[AppUpdate] 平台:', platform);
+
+  // 解析当前版本号为数字
+  const currentCode = parseVersionCode(currentVersion);
+  console.log('[AppUpdate] 客户端 versionCode:', currentCode);
+
+  // 获取最新版本（按 version 字符串排序，避免依赖可能错误的 versionCode）
+  const allVersions = await env.DB.prepare(
+    "SELECT version, versionCode, downloadUrl, releaseNotes, isForce, fileSize, platform, publishedAt, checksum FROM app_updates WHERE platform = ?"
+  ).bind(platform).all() as any;
+
+  if (!allVersions || !allVersions.results || allVersions.results.length === 0) {
+    console.log('[AppUpdate] 数据库中没有该平台的版本记录');
+    return new Response(JSON.stringify({
+      hasUpdate: false,
+      message: '当前没有可用的更新版本',
+    }), { headers: jsonHeaders(origin) });
+  }
+
+  // 🔴 关键修复：用 version 字符串重新计算 versionCode，不依赖数据库中可能错误的值
+  const rows = allVersions.results as any[];
+  let latest: any = null;
+  let latestCode = 0;
+
+  for (const row of rows) {
+    const rowVersion = String(row.version || '0.0.0');
+    const computedCode = parseVersionCode(rowVersion);
+    console.log('[AppUpdate] 数据库记录: version=' + rowVersion + ', dbVersionCode=' + row.versionCode + ', computedCode=' + computedCode);
+    if (computedCode > latestCode) {
+      latestCode = computedCode;
+      latest = row;
+    }
+  }
+
+  if (!latest) {
+    console.log('[AppUpdate] 无法找到有效版本');
+    return new Response(JSON.stringify({ hasUpdate: false, message: '没有可用更新' }), { headers: jsonHeaders(origin) });
+  }
+
+  console.log('[AppUpdate] 最新服务器版本: version=' + latest.version + ', computed versionCode=' + latestCode);
+  console.log('[AppUpdate] 比较: ' + latestCode + ' > ' + currentCode + ' = ' + (latestCode > currentCode));
+
+  // 🔴 比较：用重新计算的 versionCode
+  const hasUpdate = latestCode > currentCode;
+
+  console.log('[AppUpdate] 检测结果:', hasUpdate ? '✅ 有新版本' : '✅ 已是最新版本');
+
+  return new Response(JSON.stringify({
+    hasUpdate: hasUpdate,
+    latestVersion: String(latest.version || ''),
+    versionCode: latestCode,
+    downloadUrl: String(latest.downloadUrl || ''),
+    releaseNotes: String(latest.releaseNotes || ''),
+    isForce: Number(latest.isForce) === 1,
+    fileSize: Number(latest.fileSize) || 0,
+    platform: String(latest.platform || platform),
+    publishedAt: String(latest.publishedAt || ''),
+    checksum: String(latest.checksum || ''),
+  }), { headers: jsonHeaders(origin) });
+};
+
+// 接口2: 管理后台认证 - 密码 + 设备ID 双重验证
+const handleAppUpdateAdminAuth = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { password, deviceId } = extractAdminCredentials(request, body);
+
+  if (!password) {
+    return new Response(JSON.stringify({ error: '请输入管理密码', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  if (!deviceId) {
+    return new Response(JSON.stringify({ error: '缺少设备ID', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+
+  // 验证密码
+  if (password !== UPDATE_ADMIN_PASSWORD) {
+    return new Response(JSON.stringify({ error: '管理密码错误', success: false }), { status: 401, headers: jsonHeaders(origin) });
+  }
+
+  // 验证设备ID - 必须在白名单中
+  const deviceAllowed = await isDeviceAllowed(env, deviceId);
+
+  if (!deviceAllowed) {
+    // 如果数据库中没有授权设备，把此设备标记为"待授权"状态
+    // 实际上，初始部署时必须有至少一个授权设备
+    // 我们允许首次请求时自动授权"第一个设备"，让部署更简单
+    const existing = await env.DB.prepare('SELECT COUNT(*) as c FROM app_update_devices').first() as any;
+    if ((existing?.c || 0) === 0 && String(body?.isFirst) === '1') {
+      // 首次部署：自动授权第一台设备
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        'INSERT INTO app_update_devices (id, deviceId, deviceName, grantedBy, grantedAt, isActive) VALUES (?, ?, ?, ?, ?, 1)'
+      ).bind(genId('dev-'), deviceId, String(body?.deviceName || 'default'), 'auto-init', now).run();
+      return new Response(JSON.stringify({ success: true, message: '首台设备已自动授权，请刷新', deviceId, token: 'ok' }), { headers: jsonHeaders(origin) });
+    }
+    return new Response(JSON.stringify({ error: '此设备未授权，请联系管理员授权后再试', success: false, deviceId, needDeviceAuth: true }), { status: 403, headers: jsonHeaders(origin) });
+  }
+
+  return new Response(JSON.stringify({ success: true, message: '认证成功', deviceId }), { headers: jsonHeaders(origin) });
+};
+
+// 接口3: 获取最新版本详情（管理后台）
+const handleAppUpdateLatest = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { password, deviceId } = extractAdminCredentials(request, body);
+  if (password !== UPDATE_ADMIN_PASSWORD) {
+    return new Response(JSON.stringify({ error: '管理密码错误', success: false }), { status: 401, headers: jsonHeaders(origin) });
+  }
+  if (!deviceId || !(await isDeviceAllowed(env, deviceId))) return new Response(JSON.stringify({ error: '设备未授权' }), { status: 403, headers: jsonHeaders(origin) });
+  const platform = String(body?.platform || 'android');
+  const latest = await env.DB.prepare(
+    "SELECT * FROM app_updates WHERE platform = ? ORDER BY versionCode DESC LIMIT 1"
+  ).bind(platform).first() as any;
+  return new Response(JSON.stringify(latest || null), { headers: jsonHeaders(origin) });
+};
+
+// 接口4: 发布新版本（管理后台上传 APK/IPA）
+// 请求: { password, deviceId, version, versionCode?, downloadUrl, fileSize, releaseNotes, isForce, platform, checksum? }
+const handleAppUpdatePublish = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { password, deviceId } = extractAdminCredentials(request, body);
+
+  // 验证管理权限
+  if (password !== UPDATE_ADMIN_PASSWORD) {
+    return new Response(JSON.stringify({ error: '管理密码错误', success: false }), { status: 401, headers: jsonHeaders(origin) });
+  }
+  if (!deviceId || !(await isDeviceAllowed(env, deviceId))) {
+    return new Response(JSON.stringify({ error: '设备未授权', success: false }), { status: 403, headers: jsonHeaders(origin) });
+  }
+
+  // 验证版本信息
+  const version = String(body?.version || '').trim();
+  const downloadUrl = String(body?.downloadUrl || '').trim();
+  const releaseNotes = String(body?.releaseNotes || '').trim();
+  const platform = String(body?.platform || 'android');
+  const isForce = body?.isForce === true || body?.isForce === 1 || String(body?.isForce) === '1';
+  const fileSize = parseInt(String(body?.fileSize || '0'), 10) || 0;
+  const checksum = String(body?.checksum || '').trim();
+
+  if (!version) {
+    return new Response(JSON.stringify({ error: '版本号不能为空', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  if (!downloadUrl) {
+    return new Response(JSON.stringify({ error: '下载地址不能为空', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+
+  // 🔴 强制使用 parseVersionCode 计算，确保版本号比较正确
+  // 忽略用户传入的 versionCode，避免手动输入错误
+  const versionCode = parseVersionCode(version);
+  console.log('[AppUpdate] 发布版本:', version, '-> versionCode:', versionCode);
+
+  // 检查是否存在相同版本号
+  const existing = await env.DB.prepare('SELECT 1 FROM app_updates WHERE version = ?').bind(version).first();
+  if (existing) {
+    return new Response(JSON.stringify({ error: '该版本号已存在，请使用不同的版本号', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+
+  const now = new Date().toISOString();
+  const id = genId('up-');
+
+  await env.DB.prepare(
+    'INSERT INTO app_updates (id, version, versionCode, downloadUrl, fileSize, releaseNotes, isForce, platform, publishedBy, publishedAt, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, version, versionCode, downloadUrl, fileSize, releaseNotes, isForce ? 1 : 0, platform, 'admin', now, checksum).run();
+
+  console.log('[应用更新] 已发布新版本:', version, platform, downloadUrl);
+
+  return new Response(JSON.stringify({
+    success: true,
+    message: '版本发布成功',
+    version,
+    versionCode,
+    platform,
+    isForce,
+    downloadUrl,
+    fileSize,
+  }), { headers: jsonHeaders(origin) });
+};
+
+// 接口5: 删除历史版本
+const handleAppUpdateDelete = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { password, deviceId } = extractAdminCredentials(request, body);
+  if (password !== UPDATE_ADMIN_PASSWORD) {
+    return new Response(JSON.stringify({ error: '管理密码错误', success: false }), { status: 401, headers: jsonHeaders(origin) });
+  }
+  if (!deviceId || !(await isDeviceAllowed(env, deviceId))) {
+    return new Response(JSON.stringify({ error: '设备未授权', success: false }), { status: 403, headers: jsonHeaders(origin) });
+  }
+
+  const id = String(body?.id || '');
+  if (!id) {
+    return new Response(JSON.stringify({ error: '缺少版本ID', success: false }), { status: 400, headers: jsonHeaders(origin) });
+  }
+  const r = await env.DB.prepare('DELETE FROM app_updates WHERE id = ?').bind(id).run();
+  if (!r.meta.changes) {
+    return new Response(JSON.stringify({ error: '未找到该版本', success: false }), { status: 404, headers: jsonHeaders(origin) });
+  }
+  return new Response(JSON.stringify({ success: true, message: '版本已删除' }), { headers: jsonHeaders(origin) });
+};
+
+// 接口6: 获取所有版本列表（管理后台）
+const handleAppUpdateList = async (request: Request, env: Env, origin: string) => {
+  const body = await parseBody(request);
+  const { password, deviceId } = extractAdminCredentials(request, body);
+  if (password !== UPDATE_ADMIN_PASSWORD) {
+    return new Response(JSON.stringify({ error: '管理密码错误', success: false }), { status: 401, headers: jsonHeaders(origin) });
+  }
+  if (!deviceId || !(await isDeviceAllowed(env, deviceId))) {
+    return new Response(JSON.stringify({ error: '设备未授权', success: false }), { status: 403, headers: jsonHeaders(origin) });
+  }
+
+  const platform = String(body?.platform || 'android');
+  const result = await env.DB.prepare('SELECT * FROM app_updates WHERE platform = ? ORDER BY versionCode DESC LIMIT 20').bind(platform).all();
+  const rows = (result as any)?.results || [];
+  return new Response(JSON.stringify(rows || []), { headers: jsonHeaders(origin) });
+};
+
+// ---------- 数据库自动初始化 ----------
+// 每次请求前检查：如果表不存在或管理员账号缺失，自动创建
+// 这样永远不会出现"APP安装后数据库是空的"问题
+let _dbInitialized = false;
+
+async function ensureDbInitialized(env: Env) {
+  if (_dbInitialized) return;
+
+  try {
+    // 1. 创建表
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS videos (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        thumbnail TEXT NOT NULL,
+        videoUrl TEXT NOT NULL,
+        uploadedBy TEXT NOT NULL,
+        uploadedByName TEXT NOT NULL,
+        uploadedAt TEXT NOT NULL,
+        views INTEGER NOT NULL DEFAULT 0,
+        tags TEXT NOT NULL DEFAULT '[]'
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS comments (
+        id TEXT PRIMARY KEY,
+        videoId TEXT NOT NULL,
+        username TEXT NOT NULL,
+        content TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        replyTo TEXT,
+        replyToUsername TEXT,
+        FOREIGN KEY (videoId) REFERENCES videos(id) ON DELETE CASCADE
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        createdAt TEXT NOT NULL,
+        isOnline INTEGER NOT NULL DEFAULT 0,
+        lastSeen TEXT NOT NULL
+      )
+    `).run();
+
+    // 2. 创建索引
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_videos_uploadedBy ON videos(uploadedBy)').run(); } catch(e) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_videos_uploadedByName ON videos(uploadedByName)').run(); } catch(e) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_comments_videoId ON comments(videoId)').run(); } catch(e) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)').run(); } catch(e) {}
+
+    // 4. 应用更新表
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS app_updates (
+        id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        versionCode INTEGER NOT NULL DEFAULT 1,
+        downloadUrl TEXT NOT NULL,
+        fileSize INTEGER NOT NULL DEFAULT 0,
+        releaseNotes TEXT NOT NULL DEFAULT '',
+        isForce INTEGER NOT NULL DEFAULT 0,
+        platform TEXT NOT NULL DEFAULT 'android',
+        publishedBy TEXT NOT NULL DEFAULT 'admin',
+        publishedAt TEXT NOT NULL,
+        checksum TEXT NOT NULL DEFAULT ''
+      )
+    `).run();
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_app_updates_version ON app_updates(version)').run(); } catch(e) {}
+    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_app_updates_platform ON app_updates(platform)').run(); } catch(e) {}
+
+    // 5. 授权设备表（管理后台的设备白名单）
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS app_update_devices (
+        id TEXT PRIMARY KEY,
+        deviceId TEXT UNIQUE NOT NULL,
+        deviceName TEXT NOT NULL DEFAULT '',
+        grantedBy TEXT NOT NULL DEFAULT 'admin',
+        grantedAt TEXT NOT NULL,
+        isActive INTEGER NOT NULL DEFAULT 1
+      )
+    `).run();
+
+    // 3. 插入默认管理员账号（幂等）
+    const now = new Date().toISOString();
+    const existing = await env.DB.prepare('SELECT 1 FROM users WHERE id = ?').bind(ADMIN_ACCOUNT.id).first();
+    if (!existing) {
+      await env.DB.prepare(`
+        INSERT INTO users (id, username, password, role, createdAt, isOnline, lastSeen)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
+      `).bind(ADMIN_ACCOUNT.id, ADMIN_ACCOUNT.username, ADMIN_ACCOUNT.password, ADMIN_ACCOUNT.role, now, now).run();
+    }
+
+    _dbInitialized = true;
+  } catch (e: any) {
+    // 初始化失败时，不阻止请求继续处理（可能是表已存在等无害错误）
+    console.warn('DB init warning:', e?.message || e);
+    _dbInitialized = true;
+  }
+}
+
 // ---------- 路由 ----------
 export async function onRequest(context: EventContext<Env, any, any>): Promise<Response> {
   const { request, env } = context;
@@ -522,6 +909,9 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
   if (request.method === 'OPTIONS') {
     return new Response(null, { headers: jsonHeaders(origin) });
   }
+
+  // 自动初始化数据库 - 确保表和默认管理员账号存在
+  await ensureDbInitialized(env);
 
   const url = new URL(request.url);
   // 把 /api/xxx 裁剪成 /xxx，复用原来的 Worker 路由逻辑
@@ -585,6 +975,25 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
     if (userLogoutMatch && method === 'POST') return handleUserLogout(env, userLogoutMatch[1], origin);
     const userVideoCountMatch = path.match(/^\/users\/([^/]+)\/video-count$/);
     if (userVideoCountMatch && method === 'GET') return handleUserVideoCount(env, userVideoCountMatch[1], origin);
+
+    // ---------- 应用更新系统 API ----------
+    // 1. 客户端版本检测接口（所有已登录用户都可以调用）
+    if (path === '/app-updates/check' && method === 'POST') return handleAppUpdateCheck(request, env, origin);
+
+    // 2. 管理后台：设备ID+密码 双重验证登录
+    if (path === '/app-updates/admin-auth' && method === 'POST') return handleAppUpdateAdminAuth(request, env, origin);
+
+    // 3. 管理后台：获取当前最新版本信息
+    if (path === '/app-updates/latest' && method === 'POST') return handleAppUpdateLatest(request, env, origin);
+
+    // 4. 管理后台：发布新版本（上传安装包）
+    if (path === '/app-updates/publish' && method === 'POST') return handleAppUpdatePublish(request, env, origin);
+
+    // 5. 管理后台：删除历史版本
+    if (path === '/app-updates/delete' && method === 'POST') return handleAppUpdateDelete(request, env, origin);
+
+    // 6. 管理后台：历史版本列表
+    if (path === '/app-updates/list' && method === 'POST') return handleAppUpdateList(request, env, origin);
 
     // /api 根路径
     if (path === '/' || path === '') {

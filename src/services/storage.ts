@@ -1,6 +1,7 @@
-// Cloudflare D1 + R2 API 客户端 - 通过 Pages Functions 同源调用 (/api/*)
+// Cloudflare D1 + R2 API 客户端 - 使用完整 URL 确保网页版和手机版都能正常工作
+// 统一使用完整 URL（CORS 已在 Cloudflare 配置），数据完全同步
 
-const API_BASE = '/api';
+const API_BASE = 'https://nzx-5o4.pages.dev/api';
 
 export interface Video {
   id: string;
@@ -42,32 +43,71 @@ const ADMIN_ACCOUNT = {
   role: 'admin' as const,
 };
 
-// 防缓存的 HTTP 请求工具 - 解决移动运营商缓存导致的手机端不同步问题
-const http = async (url: string, options: RequestInit = {}) => {
-  // 添加防缓存参数：?_t=时间戳，确保每次请求都是新的
+// HTTP 请求工具 - 手机 APP 专用
+// 注意：只发送最小请求头，避免 CORS 预检失败
+const http = async (url: string, options: RequestInit = {}, timeout = 10000) => {
+  // 防缓存：添加 ?_t=时间戳（URL参数，不使用 URL 查询参数方式防缓存
   const cacheBuster = `${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
   const finalUrl = API_BASE + url + cacheBuster;
 
-  const res = await fetch(finalUrl, {
-    ...options,
-    cache: 'no-store', // 不使用 HTTP 缓存
-    headers: {
-      'Content-Type': 'application/json',
-      // 防缓存头
-      'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
-      'Pragma': 'no-cache',
-      ...(options.headers || {}),
-    },
-  });
-  if (!res.ok) {
-    try {
-      const err = await res.json();
-      throw new Error(err.error || err.message || `HTTP ${res.status}`);
-    } catch {
-      throw new Error(`HTTP ${res.status}`);
+  console.log(`[API请求] ${options.method || 'GET'} ${finalUrl}`);
+
+  // 超时控制器
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    // 只发送最小请求头，避免 CORS 预检（手机端常见问题）
+    const safeHeaders: Record<string, string> = {};
+    // 仅对有 body 的请求才加 Content-Type，避免 GET 请求触发预检
+    if (options.body) {
+      safeHeaders['Content-Type'] = 'application/json';
     }
+    // 合并用户自定义头
+    if (options.headers) {
+      Object.assign(safeHeaders, options.headers);
+    }
+
+    const res = await fetch(finalUrl, {
+      ...options,
+      cache: 'no-store',
+      headers: safeHeaders,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    console.log(`[API响应] ${res.status} ${finalUrl}`);
+
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        msg = err.error || err.message || msg;
+      } catch {
+        // 忽略解析失败
+      }
+      console.error(`[API错误] ${res.status}: ${msg}`);
+      throw new Error(msg);
+    }
+
+    const data = await res.json();
+    console.log(`[API成功] 返回:`, Array.isArray(data) ? `${data.length} 条` : '成功');
+    return data;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    // 判断是否为超时错误
+    if (error.name === 'AbortError') {
+      console.error(`[API超时] ${finalUrl}: 请求超过 ${timeout}ms`);
+      throw new Error('请求超时，请检查网络连接');
+    }
+    const errMsg = error?.message || String(error) || '网络连接失败';
+    console.error(`[API失败] ${finalUrl}: ${errMsg}`);
+    // 抛出带有详细信息的错误，供 UI 层显示
+    const friendlyError = new Error(errMsg);
+    (friendlyError as any).url = finalUrl;
+    (friendlyError as any).original = error;
+    throw friendlyError;
   }
-  return res.json();
 };
 
 // ---------- 视频相关操作 ----------

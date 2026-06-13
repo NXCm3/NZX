@@ -27,7 +27,13 @@ export default function Header({
     if (onBack) {
       onBack();
     } else {
-      navigate('/');
+      // 使用浏览器历史回退，这样能正确返回到上一页而不是总是回到首页
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        // 如果没有历史记录（例如直接在子页面刷新），安全地回到首页
+        navigate('/');
+      }
     }
   };
 

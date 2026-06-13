@@ -8,16 +8,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
     "@emotion/is-prop-valid": "^1.4.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.8.0",
-    "recharts": "^2.10.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "base64-arraybuffer": "^1.0.2",
     "date-fns": "^2.30.0",
     "framer-motion": "^11.16.1",
     "lucide-react": "^0.294.0",
-    "@supabase/supabase-js": "^2.98.0",
-    "base64-arraybuffer": "^1.0.2"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.0",
+    "recharts": "^2.10.0"
   },
   "devDependencies": {
     "@babel/core": "^7.23.5",
