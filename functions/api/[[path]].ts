@@ -13,6 +13,35 @@ export interface Env {
 
 const ADMIN_ACCOUNT = { id: 'admin-001', username: 'NXCm3', password: '8888aaaa', role: 'admin' as const };
 
+// ---------- CDN 缓存策略 ----------
+// 根据文件类型设置不同的缓存时间，优化 CDN 加速效果
+const getCacheControl = (filename: string): string => {
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  
+  // 视频文件：缓存 7 天（视频文件大且不经常变化）
+  if (['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v'].includes(ext)) {
+    return 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400';
+  }
+  
+  // 图片文件：缓存 1 天
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'ico'].includes(ext)) {
+    return 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=3600';
+  }
+  
+  // 音频文件：缓存 7 天
+  if (['mp3', 'wav', 'ogg', 'aac', 'm4a'].includes(ext)) {
+    return 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400';
+  }
+  
+  // APK 更新文件：缓存 1 小时
+  if (ext === 'apk') {
+    return 'public, max-age=3600, s-maxage=3600, stale-while-revalidate=600';
+  }
+  
+  // 其他文件：不缓存
+  return 'no-cache, no-store, must-revalidate, max-age=0';
+};
+
 // ---------- 应用更新系统：管理终端访问凭证 ----------
 // 1. 密码：管理后台专用密码，独立于管理员登录
 const UPDATE_ADMIN_PASSWORD = 'updateAdmin888';
@@ -161,7 +190,7 @@ const handleUploadChunk = async (request: Request, env: Env, origin: string) => 
     return new Response(JSON.stringify({ error: 'Missing parameters' }), { status: 400, headers: jsonHeaders(origin) });
   }
   
-  // 保存分片到临时位置
+  // 保存分片到临时位置（不缓存）
   const tempKey = `temp/${uploadId}/chunk-${chunkIndex}`;
   await env.R2_BUCKET.put(tempKey, file.stream(), {
     httpMetadata: {
@@ -235,12 +264,12 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
         }
       });
       
-      // 直接使用流上传到 R2
+      // 直接使用流上传到 R2（使用 CDN 缓存策略）
       const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
       await env.R2_BUCKET.put(filename, mergedStream, {
         httpMetadata: {
           contentType: 'application/octet-stream',
-          cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+          cacheControl: getCacheControl(filename),
         },
       });
       
@@ -275,13 +304,13 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
       
       console.log('[分片上传] 内存合并完成, 总大小:', totalSize);
       
-      // 上传合并后的文件
+      // 上传合并后的文件（使用 CDN 缓存策略）
       const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
       
       await env.R2_BUCKET.put(filename, mergedData, {
         httpMetadata: {
           contentType: 'application/octet-stream',
-          cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+          cacheControl: getCacheControl(filename),
         },
       });
     }
@@ -328,12 +357,11 @@ const handleUpload = async (request: Request, env: Env, origin: string) => {
   try {
     console.log('[上传] 开始上传到 R2...');
     // 直接使用 request.body 流式上传到 R2，绕过 Worker 内存限制
-    // ✅ 关键修复：设置 cacheControl=no-cache 防止 Cloudflare CDN 缓存视频文件
-    // R2 的 r2.dev 域名有独立 CDN，必须显式禁用缓存
+    // 使用 CDN 缓存策略优化性能
     await env.R2_BUCKET.put(filename, request.body, {
       httpMetadata: {
         contentType: contentType.includes('multipart/form-data') ? 'application/octet-stream' : contentType,
-        cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+        cacheControl: getCacheControl(filename),
       },
     });
     console.log('[上传] 上传成功:', fileUrl);
@@ -356,11 +384,11 @@ const handleUploadForm = async (request: Request, env: Env, origin: string) => {
   const ext = file.name.split('.').pop() || '';
   const filename = `${timestamp}-${randomStr}.${ext}`;
 
-  // ✅ 关键修复：设置 cacheControl=no-cache 防止 Cloudflare CDN 缓存缩略图/小文件
+  // 使用 CDN 缓存策略优化性能
   await env.R2_BUCKET.put(filename, file.stream(), {
     httpMetadata: {
       contentType: file.type,
-      cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+      cacheControl: getCacheControl(filename),
     },
   });
   const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
