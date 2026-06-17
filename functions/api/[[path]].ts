@@ -175,7 +175,7 @@ const handleUploadChunk = async (request: Request, env: Env, origin: string) => 
   return new Response(JSON.stringify({ success: true, chunkIndex }), { headers: jsonHeaders(origin) });
 };
 
-// 合并分片
+// 合并分片（优化：减少内存占用）
 const handleUploadComplete = async (request: Request, env: Env, origin: string) => {
   const body = await parseBody(request);
   const { uploadId, filename, totalChunks } = body;
@@ -187,46 +187,104 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
   console.log('[分片上传] 合并分片:', uploadId, '文件名:', filename, '分片数:', totalChunks);
   
   try {
-    // 读取所有分片数据到内存
-    const chunkData: Uint8Array[] = [];
+    // 先获取文件大小，判断是否是大文件
+    const chunk0Key = `temp/${uploadId}/chunk-0`;
+    const chunk0 = await env.R2_BUCKET.get(chunk0Key);
+    if (!chunk0) {
+      return new Response(JSON.stringify({ error: '分片 0 缺失' }), { status: 400, headers: jsonHeaders(origin) });
+    }
     
-    for (let i = 0; i < totalChunks; i++) {
-      const tempKey = `temp/${uploadId}/chunk-${i}`;
-      const obj = await env.R2_BUCKET.get(tempKey);
+    const estimatedTotalSize = (await chunk0.arrayBuffer()).byteLength * totalChunks;
+    console.log('[分片上传] 预估总大小:', estimatedTotalSize);
+    
+    // 如果预估大小超过 50MB，使用流式合并（分块写入）
+    const USE_STREAMING = estimatedTotalSize > 50 * 1024 * 1024;
+    
+    if (USE_STREAMING) {
+      console.log('[分片上传] 使用流式合并模式，减少内存占用');
       
-      if (!obj) {
-        return new Response(JSON.stringify({ error: `分片 ${i} 缺失` }), { status: 400, headers: jsonHeaders(origin) });
+      // 流式合并：逐个读取分片并写入最终文件
+      // 使用 ReadableStream 合并所有分片
+      const streams: ReadableStream<Uint8Array>[] = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const tempKey = `temp/${uploadId}/chunk-${i}`;
+        const obj = await env.R2_BUCKET.get(tempKey);
+        if (!obj) {
+          return new Response(JSON.stringify({ error: `分片 ${i} 缺失` }), { status: 400, headers: jsonHeaders(origin) });
+        }
+        streams.push(obj.body as ReadableStream<Uint8Array>);
       }
       
-      // 将分片内容读取到 Uint8Array
-      const arrayBuffer = await obj.arrayBuffer();
-      chunkData.push(new Uint8Array(arrayBuffer));
-      console.log(`[分片上传] 读取分片 ${i + 1}/${totalChunks}, 大小: ${arrayBuffer.byteLength}`);
+      // 合并流
+      const mergedStream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          for (let i = 0; i < streams.length; i++) {
+            const reader = streams[i].getReader();
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                controller.enqueue(value);
+              }
+            } finally {
+              reader.releaseLock();
+            }
+            console.log(`[分片上传] 流式读取分片 ${i + 1}/${totalChunks}`);
+          }
+          controller.close();
+        }
+      });
+      
+      // 直接使用流上传到 R2
+      const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+      await env.R2_BUCKET.put(filename, mergedStream, {
+        httpMetadata: {
+          contentType: 'application/octet-stream',
+          cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+        },
+      });
+      
+      console.log('[分片上传] 流式合并完成');
+    } else {
+      // 小文件：使用内存合并
+      console.log('[分片上传] 使用内存合并模式');
+      const chunkData: Uint8Array[] = [];
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const tempKey = `temp/${uploadId}/chunk-${i}`;
+        const obj = await env.R2_BUCKET.get(tempKey);
+        
+        if (!obj) {
+          return new Response(JSON.stringify({ error: `分片 ${i} 缺失` }), { status: 400, headers: jsonHeaders(origin) });
+        }
+        
+        const arrayBuffer = await obj.arrayBuffer();
+        chunkData.push(new Uint8Array(arrayBuffer));
+        console.log(`[分片上传] 读取分片 ${i + 1}/${totalChunks}, 大小: ${arrayBuffer.byteLength}`);
+      }
+      
+      // 计算总大小并合并
+      const totalSize = chunkData.reduce((sum, chunk) => sum + chunk.length, 0);
+      const mergedData = new Uint8Array(totalSize);
+      let offset = 0;
+      
+      for (const chunk of chunkData) {
+        mergedData.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      console.log('[分片上传] 内存合并完成, 总大小:', totalSize);
+      
+      // 上传合并后的文件
+      const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+      
+      await env.R2_BUCKET.put(filename, mergedData, {
+        httpMetadata: {
+          contentType: 'application/octet-stream',
+          cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
+        },
+      });
     }
-    
-    // 计算总大小并合并
-    const totalSize = chunkData.reduce((sum, chunk) => sum + chunk.length, 0);
-    const mergedData = new Uint8Array(totalSize);
-    let offset = 0;
-    
-    for (const chunk of chunkData) {
-      mergedData.set(chunk, offset);
-      offset += chunk.length;
-    }
-    
-    console.log('[分片上传] 合并完成, 总大小:', totalSize);
-    
-    // 上传合并后的文件
-    const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
-    const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
-    
-    // ✅ 关键修复：合并后文件设置 cacheControl=no-cache，确保所有边缘节点取最新
-    await env.R2_BUCKET.put(filename, mergedData, {
-      httpMetadata: {
-        contentType: 'application/octet-stream',
-        cacheControl: 'no-cache, no-store, must-revalidate, max-age=0',
-      },
-    });
     
     // 删除临时分片
     for (let i = 0; i < totalChunks; i++) {
@@ -234,6 +292,8 @@ const handleUploadComplete = async (request: Request, env: Env, origin: string) 
       await env.R2_BUCKET.delete(tempKey);
     }
     
+    const baseUrl = env.R2_PUBLIC_URL || 'https://pub-3300c5431c524c789f6aa30ae9bad4a9.r2.dev';
+    const fileUrl = `${baseUrl.replace(/\/$/, '')}/${filename}`;
     console.log('[分片上传] 上传完成:', fileUrl);
     
     return new Response(JSON.stringify({ success: true, url: fileUrl }), { headers: jsonHeaders(origin) });
