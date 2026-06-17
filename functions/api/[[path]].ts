@@ -31,16 +31,15 @@ const jsonHeaders = (origin: string) => ({
   // 允许所有来源（手机 APP/浏览器都能访问）
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  // 允许所有请求头，避免 CORS 预检失败（手机端常见问题）
-  'Access-Control-Allow-Headers': '*',
-  'Access-Control-Expose-Headers': '*',
+  // 🔴 明确列出所有 headers，而不是只用 '*'
+  // 某些 Android WebView 版本对 '*' 通配符处理有兼容性问题
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, Cache-Control, Pragma, X-Requested-With, Origin',
+  'Access-Control-Expose-Headers': 'Content-Type, X-App-Version',
   'Access-Control-Max-Age': '86400',
-  // 防止运营商/CDN缓存 API 响应（手机端常见问题）
   'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
   'Pragma': 'no-cache',
   'Expires': '0',
   'X-App-Version': APP_VERSION,
-  // 防止 MIME 类型嗅探导致的安全问题
   'X-Content-Type-Options': 'nosniff',
 });
 
@@ -341,9 +340,22 @@ const handleVideoGet = async (request: Request, env: Env, id: string, origin: st
 
 const handleVideoCreate = async (request: Request, env: Env, origin: string) => {
   const body = await parseBody(request);
-  if (!body.title || !body.thumbnail || !body.videoUrl || !body.uploadedBy || !body.uploadedByName) {
-    return new Response(JSON.stringify({ error: 'Missing fields' }), { status: 400, headers: jsonHeaders(origin) });
+  console.log('[handleVideoCreate] 收到请求 body:', JSON.stringify(body));
+  console.log('[handleVideoCreate] 检查字段: title=', !!body.title, 'thumbnail=', !!body.thumbnail, 'videoUrl=', !!body.videoUrl, 'uploadedBy=', !!body.uploadedBy, 'uploadedByName=', !!body.uploadedByName);
+  
+  // 检查必需字段
+  const missingFields: string[] = [];
+  if (!body.title) missingFields.push('title');
+  if (!body.thumbnail) missingFields.push('thumbnail');
+  if (!body.videoUrl) missingFields.push('videoUrl');
+  if (!body.uploadedBy) missingFields.push('uploadedBy');
+  if (!body.uploadedByName) missingFields.push('uploadedByName');
+  
+  if (missingFields.length > 0) {
+    console.log('[handleVideoCreate] ❌ 缺少字段:', missingFields);
+    return new Response(JSON.stringify({ error: 'Missing fields', missingFields, received: Object.keys(body) }), { status: 400, headers: jsonHeaders(origin) });
   }
+  
   const now = new Date().toISOString();
   const id = genId('v-');
   // 处理标签，最多5个
@@ -352,10 +364,44 @@ const handleVideoCreate = async (request: Request, env: Env, origin: string) => 
     tags = body.tags.slice(0, 5).map((t: string) => String(t).trim()).filter((t: string) => t.length > 0 && t.length <= 20);
   }
   const tagsJson = JSON.stringify(tags);
-  await env.DB.prepare(
-    'INSERT INTO videos (id, title, description, thumbnail, videoUrl, uploadedBy, uploadedByName, uploadedAt, views, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)'
-  ).bind(id, body.title, body.description || '', body.thumbnail, body.videoUrl, body.uploadedBy, body.uploadedByName, now, tagsJson).run();
-  return new Response(JSON.stringify({ id, title: body.title, description: body.description || '', thumbnail: body.thumbnail, videoUrl: body.videoUrl, uploadedBy: body.uploadedBy, uploadedByName: body.uploadedByName, uploadedAt: now, views: 0, tags }), { headers: jsonHeaders(origin) });
+  
+  console.log('[handleVideoCreate] 准备写入数据库: id=', id, 'title=', body.title, 'tags=', tagsJson);
+  
+  try {
+    // 检查 videos 表是否存在
+    try {
+      const count = await env.DB.prepare('SELECT COUNT(*) as c FROM videos').first() as any;
+      console.log('[handleVideoCreate] videos 表存在，当前记录数:', count?.c);
+    } catch (tableError: any) {
+      console.error('[handleVideoCreate] videos 表查询失败:', tableError.message);
+      // 尝试重新创建表
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS videos (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          thumbnail TEXT NOT NULL,
+          videoUrl TEXT NOT NULL,
+          uploadedBy TEXT NOT NULL,
+          uploadedByName TEXT NOT NULL,
+          uploadedAt TEXT NOT NULL,
+          views INTEGER NOT NULL DEFAULT 0,
+          tags TEXT NOT NULL DEFAULT '[]'
+        )
+      `).run();
+      console.log('[handleVideoCreate] videos 表已重新创建');
+    }
+    
+    await env.DB.prepare(
+      'INSERT INTO videos (id, title, description, thumbnail, videoUrl, uploadedBy, uploadedByName, uploadedAt, views, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)'
+    ).bind(id, body.title, body.description || '', body.thumbnail, body.videoUrl, body.uploadedBy, body.uploadedByName, now, tagsJson).run();
+    console.log('[handleVideoCreate] ✅ 数据库写入成功，id:', id);
+    return new Response(JSON.stringify({ id, title: body.title, description: body.description || '', thumbnail: body.thumbnail, videoUrl: body.videoUrl, uploadedBy: body.uploadedBy, uploadedByName: body.uploadedByName, uploadedAt: now, views: 0, tags }), { headers: jsonHeaders(origin) });
+  } catch (dbError: any) {
+    console.error('[handleVideoCreate] ❌ 数据库错误:', dbError.message);
+    console.error('[handleVideoCreate] 错误详情:', JSON.stringify(dbError));
+    return new Response(JSON.stringify({ error: 'Database error', message: dbError.message, stack: dbError.stack }), { status: 500, headers: jsonHeaders(origin) });
+  }
 };
 
 const handleVideoDelete = async (env: Env, id: string, origin: string) => {
@@ -799,105 +845,85 @@ const handleAppUpdateList = async (request: Request, env: Env, origin: string) =
 // ---------- 数据库自动初始化 ----------
 // 每次请求前检查：如果表不存在或管理员账号缺失，自动创建
 // 这样永远不会出现"APP安装后数据库是空的"问题
-let _dbInitialized = false;
-
 async function ensureDbInitialized(env: Env) {
-  if (_dbInitialized) return;
-
   try {
-    // 1. 创建表
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS videos (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        thumbnail TEXT NOT NULL,
-        videoUrl TEXT NOT NULL,
-        uploadedBy TEXT NOT NULL,
-        uploadedByName TEXT NOT NULL,
-        uploadedAt TEXT NOT NULL,
-        views INTEGER NOT NULL DEFAULT 0,
-        tags TEXT NOT NULL DEFAULT '[]'
-      )
-    `).run();
-
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS comments (
-        id TEXT PRIMARY KEY,
-        videoId TEXT NOT NULL,
-        username TEXT NOT NULL,
-        content TEXT NOT NULL,
-        createdAt TEXT NOT NULL,
-        replyTo TEXT,
-        replyToUsername TEXT,
-        FOREIGN KEY (videoId) REFERENCES videos(id) ON DELETE CASCADE
-      )
-    `).run();
-
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        createdAt TEXT NOT NULL,
-        isOnline INTEGER NOT NULL DEFAULT 0,
-        lastSeen TEXT NOT NULL
-      )
-    `).run();
-
-    // 2. 创建索引
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_videos_uploadedBy ON videos(uploadedBy)').run(); } catch(e) {}
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_videos_uploadedByName ON videos(uploadedByName)').run(); } catch(e) {}
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_comments_videoId ON comments(videoId)').run(); } catch(e) {}
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)').run(); } catch(e) {}
-
-    // 4. 应用更新表
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS app_updates (
-        id TEXT PRIMARY KEY,
-        version TEXT NOT NULL,
-        versionCode INTEGER NOT NULL DEFAULT 1,
-        downloadUrl TEXT NOT NULL,
-        fileSize INTEGER NOT NULL DEFAULT 0,
-        releaseNotes TEXT NOT NULL DEFAULT '',
-        isForce INTEGER NOT NULL DEFAULT 0,
-        platform TEXT NOT NULL DEFAULT 'android',
-        publishedBy TEXT NOT NULL DEFAULT 'admin',
-        publishedAt TEXT NOT NULL,
-        checksum TEXT NOT NULL DEFAULT ''
-      )
-    `).run();
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_app_updates_version ON app_updates(version)').run(); } catch(e) {}
-    try { await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_app_updates_platform ON app_updates(platform)').run(); } catch(e) {}
-
-    // 5. 授权设备表（管理后台的设备白名单）
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS app_update_devices (
-        id TEXT PRIMARY KEY,
-        deviceId TEXT UNIQUE NOT NULL,
-        deviceName TEXT NOT NULL DEFAULT '',
-        grantedBy TEXT NOT NULL DEFAULT 'admin',
-        grantedAt TEXT NOT NULL,
-        isActive INTEGER NOT NULL DEFAULT 1
-      )
-    `).run();
-
-    // 3. 插入默认管理员账号（幂等）
-    const now = new Date().toISOString();
-    const existing = await env.DB.prepare('SELECT 1 FROM users WHERE id = ?').bind(ADMIN_ACCOUNT.id).first();
-    if (!existing) {
+    // 1. 创建 videos 表（如果不存在）
+    try {
       await env.DB.prepare(`
-        INSERT INTO users (id, username, password, role, createdAt, isOnline, lastSeen)
-        VALUES (?, ?, ?, ?, ?, 0, ?)
-      `).bind(ADMIN_ACCOUNT.id, ADMIN_ACCOUNT.username, ADMIN_ACCOUNT.password, ADMIN_ACCOUNT.role, now, now).run();
+        CREATE TABLE IF NOT EXISTS videos (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          thumbnail TEXT NOT NULL,
+          videoUrl TEXT NOT NULL,
+          uploadedBy TEXT NOT NULL,
+          uploadedByName TEXT NOT NULL,
+          uploadedAt TEXT NOT NULL,
+          views INTEGER NOT NULL DEFAULT 0,
+          tags TEXT NOT NULL DEFAULT '[]'
+        )
+      `).run();
+      console.log('[DB] videos 表创建/检查完成');
+    } catch (e: any) {
+      console.error('[DB] videos 表创建失败:', e.message);
     }
 
-    _dbInitialized = true;
+    // 2. 创建 comments 表（如果不存在）
+    try {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS comments (
+          id TEXT PRIMARY KEY,
+          videoId TEXT NOT NULL,
+          username TEXT NOT NULL,
+          content TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          replyTo TEXT,
+          replyToUsername TEXT,
+          FOREIGN KEY (videoId) REFERENCES videos(id) ON DELETE CASCADE
+        )
+      `).run();
+      console.log('[DB] comments 表创建/检查完成');
+    } catch (e: any) {
+      console.error('[DB] comments 表创建失败:', e.message);
+    }
+
+    // 3. 创建 users 表（如果不存在）
+    try {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'user',
+          createdAt TEXT NOT NULL,
+          isOnline INTEGER NOT NULL DEFAULT 0,
+          lastSeen TEXT NOT NULL
+        )
+      `).run();
+      console.log('[DB] users 表创建/检查完成');
+    } catch (e: any) {
+      console.error('[DB] users 表创建失败:', e.message);
+    }
+
+    // 4. 插入默认管理员账号（幂等）
+    try {
+      const now = new Date().toISOString();
+      const existing = await env.DB.prepare('SELECT 1 FROM users WHERE id = ?').bind(ADMIN_ACCOUNT.id).first();
+      if (!existing) {
+        await env.DB.prepare(`
+          INSERT INTO users (id, username, password, role, createdAt, isOnline, lastSeen)
+          VALUES (?, ?, ?, ?, ?, 0, ?)
+        `).bind(ADMIN_ACCOUNT.id, ADMIN_ACCOUNT.username, ADMIN_ACCOUNT.password, ADMIN_ACCOUNT.role, now, now).run();
+        console.log('[DB] 管理员账号创建完成');
+      } else {
+        console.log('[DB] 管理员账号已存在');
+      }
+    } catch (e: any) {
+      console.error('[DB] 管理员账号创建失败:', e.message);
+    }
   } catch (e: any) {
-    // 初始化失败时，不阻止请求继续处理（可能是表已存在等无害错误）
-    console.warn('DB init warning:', e?.message || e);
-    _dbInitialized = true;
+    // 记录所有错误，不静默忽略
+    console.error('[DB] 初始化失败:', e?.message || e);
   }
 }
 
@@ -916,7 +942,11 @@ export async function onRequest(context: EventContext<Env, any, any>): Promise<R
   const url = new URL(request.url);
   // 把 /api/xxx 裁剪成 /xxx，复用原来的 Worker 路由逻辑
   let path = url.pathname;
-  if (path.startsWith('/api')) path = path.substring('/api'.length) || '/';
+  if (path.startsWith('/api')) {
+    path = path.substring('/api'.length);
+    if (path === '') path = '/';
+    if (!path.startsWith('/')) path = '/' + path;
+  }
   if (path === '') path = '/';
 
   const method = request.method;
